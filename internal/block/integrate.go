@@ -86,48 +86,6 @@ type IntegrateContext interface {
 //   - Subdoc registration (ContentDoc) is skipped.
 //   - Weak-link (info.IsLinked) bookkeeping is skipped.
 //   - Format-marker integration is a no-op (matches yrs).
-// scannedItems is the set of items a conflict scan has passed, each with
-// its place in the order of the scan. Most scans pass a handful of items:
-// those live in an array on the stack and are searched one by one. A long
-// run of concurrent insertions gets a map.
-type scannedItems struct {
-	small [16]*Item
-	n     int
-	index map[*Item]int
-}
-
-func (s *scannedItems) len() int { return s.n }
-
-func (s *scannedItems) add(it *Item) {
-	switch {
-	case s.index != nil:
-		s.index[it] = s.n
-	case s.n < len(s.small):
-		s.small[s.n] = it
-	default:
-		s.index = make(map[*Item]int, 4*len(s.small))
-		for at, old := range s.small {
-			s.index[old] = at
-		}
-		s.index[it] = s.n
-	}
-	s.n++
-}
-
-// position returns where in the scan it was passed.
-func (s *scannedItems) position(it *Item) (int, bool) {
-	if s.index != nil {
-		at, ok := s.index[it]
-		return at, ok
-	}
-	for at := range s.n {
-		if s.small[at] == it {
-			return at, true
-		}
-	}
-	return 0, false
-}
-
 func (i *Item) Integrate(ctx IntegrateContext, offset uint64) bool {
 	if offset > 0 {
 		// TODO: port the offset > 0 path (block.rs:569-583). Used
@@ -420,4 +378,46 @@ func (i *Item) TrySquash(other *Item) bool {
 		other.Parent.Branch.Map[*other.ParentSub] = i
 	}
 	return true
+}
+
+// scannedItems is the set of items a conflict scan has passed, each with
+// its place in the order of the scan. Most scans pass a handful of items:
+// those live in an array on the stack and are searched one by one. A long
+// run of concurrent insertions gets a map.
+type scannedItems struct {
+	small [16]*Item
+	n     int
+	index map[*Item]int
+}
+
+func (s *scannedItems) len() int { return s.n }
+
+func (s *scannedItems) add(it *Item) {
+	switch {
+	case s.index != nil:
+		s.index[it] = s.n
+	case s.n < len(s.small):
+		s.small[s.n] = it
+	default:
+		s.index = make(map[*Item]int, 4*len(s.small))
+		for at, old := range s.small {
+			s.index[old] = at
+		}
+		s.index[it] = s.n
+	}
+	s.n++
+}
+
+// position returns where in the scan it was passed.
+func (s *scannedItems) position(it *Item) (int, bool) {
+	if s.index != nil {
+		at, ok := s.index[it]
+		return at, ok
+	}
+	for at := range s.n {
+		if s.small[at] == it {
+			return at, true
+		}
+	}
+	return 0, false
 }
