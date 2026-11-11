@@ -1,5 +1,5 @@
 # The same driver against yrs 0.25.0, the release the findings in
-# ../FINDINGS.md were first seen on.
+# ../../FINDINGS.md were first seen on.
 [package]
 name = "ygo-conformance-yrs-025"
 version = "0.0.0"

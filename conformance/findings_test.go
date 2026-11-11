@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// finding is a file in findings/: a reproducer for a defect found in a
+// finding is a file in testdata/findings/: a reproducer for a defect found in a
 // reference implementation. It is either updates to apply in order to a new
 // document, or a script.
 type finding struct {
@@ -18,7 +18,7 @@ type finding struct {
 	Script
 }
 
-// TestFindings replays the reproducers in findings/. ygo and yjs must agree
+// TestFindings replays the reproducers in testdata/findings/. ygo and yjs must agree
 // on each; what yrs makes of it is logged, so that a new yrs release shows
 // here whether it still has the defect.
 func TestFindings(t *testing.T) {
@@ -26,7 +26,7 @@ func TestFindings(t *testing.T) {
 	if yjs == nil {
 		t.Skip("needs yjs")
 	}
-	files, _ := filepath.Glob(filepath.Join("findings", "*.json"))
+	files, _ := filepath.Glob(filepath.Join("testdata", "findings", "*.json"))
 	for _, file := range files {
 		t.Run(filepath.Base(file), func(t *testing.T) {
 			raw, err := os.ReadFile(file)

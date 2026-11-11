@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -16,31 +17,31 @@ var (
 	firstRun = flag.Uint64("seed", 0, "first seed")
 	one      = flag.String("script", "", "a script file for TestScript")
 	failures = flag.String("failures", "", "directory to write shrunk failing scripts to")
-	oldYrs   = flag.Bool("yrs-0.25", false, "use yrs 0.25.0 (conformance/yrs-0.25), which has the defects in FINDINGS.md")
+	oldYrs   = flag.Bool("yrs-0.25", false, "use yrs 0.25.0 (conformance/testdata/yrs-0.25), which has the defects in FINDINGS.md")
 )
 
 // references starts the reference implementations that are installed (see
-// README.md), and skips the test when none is.
+// README.md); either may be nil.
 func references(t *testing.T) (yjs, yrs *Driver) {
 	t.Helper()
-	if _, err := os.Stat(filepath.Join("yjs", "node_modules", "yjs")); err == nil {
-		d, err := StartDriver("yjs", "yjs", "node", "driver.mjs")
+	if _, err := os.Stat(filepath.Join("testdata", "yjs", "node_modules", "yjs")); err == nil && haveNode() {
+		d, err := StartDriver("yjs", filepath.Join("testdata", "yjs"), "node", "driver.mjs")
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(d.Close)
 		yjs = d
 	}
-	exe := filepath.Join("yrs", "target", "release", "ygo-conformance-yrs")
+	exe := filepath.Join("testdata", "yrs", "target", "release", "ygo-conformance-yrs")
 	if *oldYrs {
-		exe = filepath.Join("yrs-0.25", "target", "release", "ygo-conformance-yrs-025")
+		exe = filepath.Join("testdata", "yrs-0.25", "target", "release", "ygo-conformance-yrs-025")
 	}
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}
 	if path, err := filepath.Abs(exe); err == nil {
 		if _, err := os.Stat(path); err == nil {
-			d, err := StartDriver("yrs", "yrs", path)
+			d, err := StartDriver("yrs", filepath.Join("testdata", "yrs"), path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -49,9 +50,15 @@ func references(t *testing.T) (yjs, yrs *Driver) {
 		}
 	}
 	if yjs == nil && yrs == nil {
-		t.Skip("no reference implementation is installed: see conformance/README.md")
+		t.Log("no reference implementation is installed (see conformance/README.md): checking ygo against itself only")
 	}
 	return yjs, yrs
+}
+
+// haveNode reports whether there is a node to run the yjs driver with.
+func haveNode() bool {
+	_, err := exec.LookPath("node")
+	return err == nil
 }
 
 type profileCase struct {

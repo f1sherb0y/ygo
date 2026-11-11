@@ -1,5 +1,5 @@
 // Holds yjs documents for the conformance tests. One JSON command per line on
-// stdin, one JSON answer per line on stdout (see ../driver.go).
+// stdin, one JSON answer per line on stdout (see ../../driver.go).
 import * as Y from 'yjs'
 import { createInterface } from 'node:readline'
 

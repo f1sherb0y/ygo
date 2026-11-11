@@ -144,14 +144,23 @@ func (t *Text) Delete(txn *doc.TransactionMut, idx, length uint64) error {
 	if length == 0 {
 		return nil
 	}
-	defer t.branch.Markers.ShrinkAfter(idx, length)
+	// The markers inside the deleted range go, and one comes for the last
+	// content before it. Without that one, the next edit at this place, a
+	// further backspace or whatever is typed instead, has no marker near
+	// it and walks from the start of the text.
+	var anchor *block.Item
+	defer func() {
+		t.branch.Markers.ShrinkAfter(idx, length)
+		rememberEndingAt(t.branch, anchor, idx)
+	}()
 
 	// Start split happens here: findTextPosition splits any String
 	// item that idx lands inside.
-	_, right, err := findTextPosition(t.branch, txn, idx)
+	left, right, err := findTextPosition(t.branch, txn, idx)
 	if err != nil {
 		return err
 	}
+	anchor = left
 	// The gap starts right after the last content before idx, ahead of
 	// any format markers and tombstones in between, where yjs's cursor
 	// stops. A lookup that hit a cached position can return a later item.
