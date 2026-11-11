@@ -272,6 +272,9 @@ fn apply(replica: &Replica, txn: &mut TransactionMut, step: &Value) {
                 xml.remove_range(txn, p, k.min(length - p))
             }
         }
+        // Undo, relative positions and snapshots are compared between ygo
+        // and yjs only; a yrs replica lets these steps pass.
+        "undo" | "redo" | "rpos" | "snap" => {}
         other => panic!("unknown op {other}"),
     }
 }

@@ -4,6 +4,7 @@
 // benchmarks/b4*_test.go for ygo.
 //
 //   cargo run --release -- ../../../testdata/b4-trace.json [rounds [per-edit|one]]
+//   cargo run --release -- synthetic
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -58,7 +59,53 @@ fn run(edits: &[Edit], final_text: &str, per_edit: bool) -> (f64, usize) {
     (ms, size)
 }
 
+// synthetic times the shapes of ygo's B1.1, B1.3, B1.4 and B1.7 (6000 edits
+// of one character in one transaction): the same workloads, with positions
+// from another random number generator than Go's.
+fn synthetic() {
+    const N: u32 = 6000;
+    let mut seed: u64 = 14;
+    let mut next = move |below: u32| -> u32 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 33) as u32) % below.max(1)
+    };
+    let mut time = |name: &str, edit: &mut dyn FnMut(&yrs::TextRef, &mut yrs::TransactionMut, u32)| {
+        let mut best = f64::MAX;
+        for _ in 0..30 {
+            let mut options = Options::with_client_id(yrs::block::ClientID::new(1));
+            options.offset_kind = OffsetKind::Utf16;
+            let doc = Doc::with_options(options);
+            let text = doc.get_or_insert_text("doc");
+            let start = Instant::now();
+            {
+                let mut txn = doc.transact_mut();
+                for j in 0..N {
+                    edit(&text, &mut txn, j);
+                }
+            }
+            best = best.min(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("{}: {:.2} ms (best of 30)", name, best);
+    };
+    time("B1.1 append text", &mut |t, txn, j| t.insert(txn, j, "a"));
+    time("B1.3 prepend text", &mut |t, txn, _| t.insert(txn, 0, "a"));
+    time("B1.4 insert at random positions", &mut |t, txn, j| t.insert(txn, next(j), "a"));
+    time("B1.7 insert and delete at random positions", &mut |t, txn, _| {
+        let length = t.len(txn);
+        if next(10) < 3 && length > 0 {
+            let del = (1 + next(3)).min(length);
+            t.remove_range(txn, next(length - del + 1), del);
+        } else {
+            t.insert(txn, next(length), "a");
+        }
+    });
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("synthetic") {
+        synthetic();
+        return;
+    }
     let path = std::env::args().nth(1).expect("usage: ygo-bench-yrs b4-trace.json");
     let raw = std::fs::read_to_string(path).unwrap();
     let trace: serde_json::Value = serde_json::from_str(&raw).unwrap();

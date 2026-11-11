@@ -83,6 +83,21 @@ func (s *Server) Disconnect(connID string, code websocket.StatusCode, reason str
 	return true
 }
 
+// SetReadOnly takes writing away from an open connection, or with false
+// gives back what its grant allows: for a document that is closed for
+// editing while people are in it. Updates the connection sends afterwards
+// are refused as a read-only connection's are. The scope a provider was
+// told does not change until it authenticates again. It reports false
+// when the connection is gone.
+func (s *Server) SetReadOnly(connID string, readOnly bool) bool {
+	c := s.connByID(connID)
+	if c == nil {
+		return false
+	}
+	c.handler.Freeze(readOnly)
+	return true
+}
+
 func (s *Server) connByID(id string) *conn {
 	if c, ok := s.connsByID.Load(id); ok {
 		return c.(*conn)

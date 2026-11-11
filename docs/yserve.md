@@ -144,10 +144,13 @@ the provider's `unsyncedChanges`. What differs from a Hocuspocus server:
   connection before its token was accepted. `SendStateless`,
   `BroadcastStateless` and `Disconnect` on the `Server` are the
   counterparts of a Hocuspocus server's `connection.sendStateless`,
-  `document.broadcastStateless` and `connection.close`.
-  `testdata/e2e/backend` is a complete small backend built this way:
-  tokens for editors and viewers, a stored row per update, replay,
-  revocation.
+  `document.broadcastStateless` and `connection.close`;
+  `OnSessionOpen` is where to greet a connection, `OnChangeFrom` says
+  whose an update is, and `SetReadOnly` takes writing away from an open
+  connection. `testdata/e2e/backend` is a complete small backend built
+  this way: tokens for editors and viewers, a stored row per update with
+  its author, a durability acknowledgement, replay, a room ended while in
+  use, revocation.
 - Hocuspocus extensions are JavaScript; the equivalents here are Go
   callbacks plus the `persist.Store` interface for storage backends.
 

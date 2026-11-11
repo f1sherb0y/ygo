@@ -76,8 +76,24 @@ The profiles:
 | map | 3 | 40 | set and delete keys |
 | nested | 3 | 60 | arrays and maps inside each other, created and deleted |
 | xml | 3 | 40 | elements, attributes, text nodes |
+| text-undo | 3 | 60 | text, with undo and redo on each replica |
+| rich-text-undo | 3 | 60 | formatted text and embeds, with undo and redo |
+| collections-undo | 3 | 60 | arrays, maps, nested types and XML, with undo and redo |
+| text-positions | 3 | 60 | text with relative positions made on the way |
+| snapshots | 3 | 60 | text, arrays and maps with snapshots taken on the way |
+| editor | 4 | 120 | everything, with undo, positions and snapshots |
 | everything | 4 | 120 | all of the above in one document |
 | everything-long | 6 | 400 | the same, longer |
+
+Undo, positions and snapshots are a replica's own. Each replica has an undo
+manager over the four roots that takes every transaction of its own as one
+step and none that arrived from others; `undo` and `redo` are steps like
+any edit. A position is made at an index of the replica's text; at the end
+the replica reports its bytes and the index it resolves to now. A snapshot
+is taken at a step and restored at the end, through its encoding (scripts
+without garbage collection only). These are compared between ygo and yjs,
+replica by replica, alone and mixed. A yrs replica lets the steps pass, so
+its arrangements still check convergence around them.
 
 **`TestDelivery`** takes the updates one replica produced and gives them to
 a fresh replica of each implementation in ways a network does: in order,
@@ -95,8 +111,12 @@ and `TestScript -script` replays it.
 
 ## What is not covered
 
-- Undo, snapshots, relative positions, subdocuments and awareness are not in
-  the scripts. They have fixtures against yjs in the root package.
+- Undo, relative positions and snapshots are compared with yjs, not with
+  yrs. Positions are made in the root text only, not in arrays or nested
+  types.
+- Subdocuments and awareness are not in the scripts. They have fixtures
+  against yjs in the root package, and awareness goes between real
+  providers and the server in `testdata/e2e`.
 - XML is compared between ygo and yjs only up to what the script edits
   (elements, attributes, text); `XmlHook` is not generated.
 - Moved ranges (yrs `move`) are not generated: yjs 13 does not have them.

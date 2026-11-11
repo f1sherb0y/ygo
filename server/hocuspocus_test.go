@@ -299,6 +299,7 @@ func TestHocuspocus_NoFanOutBeforeTheToken(t *testing.T) {
 func TestHocuspocus_SessionsByToken(t *testing.T) {
 	var srv *server.Server
 	ids := make(chan string, 4)
+	authors := make(chan string, 4)
 	url, srv := startTestServer(t, server.Options{
 		Hocuspocus:     true,
 		OriginPatterns: []string{"*"},
@@ -313,6 +314,13 @@ func TestHocuspocus_SessionsByToken(t *testing.T) {
 			}
 			return server.Grant{}, errors.New("no")
 		},
+		OnSessionOpen: func(connID, docName string) {
+			// From here the connection can be spoken to.
+			if !srv.SendStateless(connID, "welcome to "+docName) {
+				t.Errorf("no welcome to %s", connID)
+			}
+		},
+		OnChangeFrom: func(connID, docName string, _ []byte) { authors <- connID },
 		OnStatelessFrom: func(connID, docName, payload string) {
 			if !srv.SendStateless(connID, "you said "+payload) {
 				t.Errorf("no answer to %s", connID)
@@ -326,6 +334,10 @@ func TestHocuspocus_SessionsByToken(t *testing.T) {
 		if f := c.until(isType(syncpkg.MessageAuth)); f.AuthSub != syncpkg.AuthAuthenticated || string(f.Payload) != scope {
 			t.Fatalf("token %q: auth reply %d %q, want scope %q", token, f.AuthSub, f.Payload, scope)
 		}
+		// The session is open: the welcome OnSessionOpen sends arrives.
+		c.until(func(f *syncpkg.Frame) bool {
+			return f.Type == syncpkg.MessageStateless && string(f.Payload) == "welcome to doc"
+		})
 		return c, <-ids
 	}
 	editor, editorID := open("editor", syncpkg.ScopeReadWrite)
@@ -341,15 +353,35 @@ func TestHocuspocus_SessionsByToken(t *testing.T) {
 		t.Error("the editor's update was refused")
 	}
 
+	if author := <-authors; author != editorID {
+		t.Errorf("the update is %s's, want the editor's (%s)", author, editorID)
+	}
+
 	// A stateless message is answered to its sender and told to everyone.
-	editor.send(syncpkg.EncodeStateless("hello"))
 	stateless := func(c *hpConn, want string) {
 		t.Helper()
 		c.until(func(f *syncpkg.Frame) bool { return f.Type == syncpkg.MessageStateless && string(f.Payload) == want })
 	}
+	editor.send(syncpkg.EncodeStateless("hello"))
 	stateless(editor, "you said hello")
 	stateless(editor, "someone said hello")
 	stateless(viewer, "someone said hello")
+
+	// Writing is taken from the editor while it is connected, and given
+	// back.
+	if !srv.SetReadOnly(editorID, true) {
+		t.Fatal("the editor's connection was not found")
+	}
+	editor.send(syncpkg.EncodeSyncUpdate(update(t, "k", "frozen")))
+	if ack := editor.until(isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 0 {
+		t.Error("a connection made read-only wrote")
+	}
+	srv.SetReadOnly(editorID, false)
+	editor.send(syncpkg.EncodeSyncUpdate(update(t, "k", "thawed")))
+	if ack := editor.until(isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 1 {
+		t.Error("the editor's update was refused after writing was given back")
+	}
+	<-authors
 
 	if got := srv.Connections("doc"); len(got) != 2 {
 		t.Errorf("connections %v, want two", got)
@@ -378,7 +410,6 @@ func TestHocuspocus_SessionsByToken(t *testing.T) {
 	if srv.SendStateless(viewerID, "x") || srv.Disconnect(viewerID, websocket.StatusNormalClosure, "") {
 		t.Error("a closed connection is still known")
 	}
-	_ = editorID
 }
 
 // A client with nothing new answers the server's SyncStep1 with an empty

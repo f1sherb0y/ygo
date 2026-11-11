@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Deln0r/ygo/internal/awareness"
 	"github.com/Deln0r/ygo/internal/doc"
@@ -94,6 +95,9 @@ type Conn struct {
 	// shared document. The transport sets this before the read loop
 	// starts; it is read only on the connection's own read goroutine.
 	ReadOnly bool
+
+	// frozen is Freeze's flag.
+	frozen atomic.Bool
 
 	// RequireAuth, when true, makes the connection accept nothing but an
 	// Auth message until OnAuthenticate has accepted a token: any other
@@ -267,9 +271,17 @@ func (c *Conn) handleAuth(frame *Frame) error {
 	return nil
 }
 
+// Freeze makes the connection read-only, or with false ends that, from any
+// goroutine: for an application that takes writing away from a connection
+// that is open (a document that was closed for editing). It adds to
+// ReadOnly, which stays what the transport set.
+func (c *Conn) Freeze(frozen bool) { c.frozen.Store(frozen) }
+
+func (c *Conn) readOnly() bool { return c.ReadOnly || c.frozen.Load() }
+
 // scope is the Authenticated scope Hocuspocus sends for this connection.
 func (c *Conn) scope() string {
-	if c.ReadOnly {
+	if c.readOnly() {
 		return ScopeReadOnly
 	}
 	return ScopeReadWrite
@@ -295,7 +307,7 @@ func (c *Conn) handleSync(frame *Frame) error {
 		// apply, no broadcast) so it reaches neither the Doc nor peers.
 		// The client still receives others' updates and its awareness
 		// still flows; only its document writes are refused.
-		if c.ReadOnly {
+		if c.readOnly() {
 			if c.AckUpdates {
 				return c.Send(EncodeSyncStatus(false))
 			}

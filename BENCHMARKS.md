@@ -226,6 +226,24 @@ B1.10 in the table is noise: three iterations of a millisecond. With
 `-benchtime=30x -count=5` it is 1.2 to 1.8 ms before and 0.84 to 0.96 ms
 now, and B1.8 4.8 to 5.4 ms before and 1.2 to 1.8 ms now.
 
+### yrs on the synthetic workloads
+
+Four of the B1 workloads (6000 edits of one character in one transaction)
+in `conformance/testdata/yrs-bench` (`cargo run --release -- synthetic`,
+best of 30) next to ygo (`-benchtime=30x -count=3`), same machine. The
+random positions come from different generators, so B1.4 and B1.7 are the
+same shape of work, not the same edits.
+
+| ID   | Workload                        |      ygo |     yrs |
+|------|---------------------------------|---------:|--------:|
+| B1.1 | append text                     | 4.2-5.7 ms | 70 ms |
+| B1.3 | prepend text                    | 1.3-1.6 ms | 1.0 ms |
+| B1.4 | insert at random positions      |  22 ms | 36 ms |
+| B1.7 | insert and delete at random     | 14-21 ms | 28 ms |
+
+yrs's append in one transaction is what its B4 run in one transaction
+above shows at 43 times the size.
+
 ### Budgets
 
 `benchmarks.TestBudget_EditingSession` runs with the ordinary tests: a

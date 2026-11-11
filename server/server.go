@@ -211,6 +211,21 @@ type Options struct {
 	// valid only for the duration of the call; copy it if you retain it.
 	OnChange func(docName string, update []byte)
 
+	// OnChangeFrom is OnChange with the ID of the connection the update
+	// came from, for an application that records who wrote what (a row
+	// per update with its author, for a replay that shows it). Called
+	// after OnChange when both are set, under the same rules.
+	OnChangeFrom func(connID, docName string, update []byte)
+
+	// OnSessionOpen is called once per connection when its session is
+	// open: the token was accepted where one is required, and the initial
+	// sync is on its way. From here on SendStateless reaches the
+	// connection, so this is where an application sends what a client
+	// needs first (its colour, the state of the room) and tells the room
+	// who joined. It runs on the connection's read goroutine, before any
+	// further message of the connection is handled.
+	OnSessionOpen func(connID, docName string)
+
 	// OnLoadDocument, when set, is called the first time a document is
 	// loaded into memory (a cache miss), after any Store history has been
 	// applied, with the docName. It lets an adopter seed or load initial
@@ -1009,7 +1024,13 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			c.handler.RequireAuth = true
 			c.handler.OnAuthenticated = func() error {
 				c.waiting.Store(false)
-				return c.handler.SendInitialSync()
+				if err := c.handler.SendInitialSync(); err != nil {
+					return err
+				}
+				if s.opts.OnSessionOpen != nil {
+					s.opts.OnSessionOpen(c.idForLog, docName)
+				}
+				return nil
 			}
 		}
 	}
@@ -1017,6 +1038,9 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		c.waiting.Store(false)
 		if err := c.handler.SendInitialSync(); err != nil {
 			return
+		}
+		if s.opts.OnSessionOpen != nil {
+			s.opts.OnSessionOpen(c.idForLog, docName)
 		}
 	}
 	if first != nil && !c.handleMessage(first) {
@@ -1793,7 +1817,7 @@ func (s *Server) applyBackplaneAwareness(state *docState, awUpdate []byte) {
 // did not have before). A read-only connection's document update never
 // reaches here — the handler drops it before broadcast.
 func (c *conn) onAppliedUpdate(envelope []byte) {
-	if c.server.opts.Store == nil && c.server.opts.OnChange == nil && c.server.opts.Backplane == nil {
+	if c.server.opts.Store == nil && c.server.opts.OnChange == nil && c.server.opts.OnChangeFrom == nil && c.server.opts.Backplane == nil {
 		return
 	}
 	frame, _, err := syncpkg.DecodeEnvelope(envelope)
@@ -1850,6 +1874,9 @@ func (c *conn) onAppliedUpdate(envelope []byte) {
 		}
 		if c.server.opts.OnChange != nil {
 			c.server.opts.OnChange(c.state.name, frame.Payload)
+		}
+		if c.server.opts.OnChangeFrom != nil {
+			c.server.opts.OnChangeFrom(c.idForLog, c.state.name, frame.Payload)
 		}
 		if c.server.opts.Backplane != nil {
 			// Fan this locally-applied update out to the other instances. A

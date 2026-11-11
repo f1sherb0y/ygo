@@ -66,6 +66,7 @@ func TestFindings(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				delete(d, localKey)
 				return normal(d)
 			}
 			mine, theirs := apply(Ygo), apply(yjs)

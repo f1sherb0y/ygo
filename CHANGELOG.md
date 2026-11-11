@@ -34,7 +34,10 @@ file.
 - **Tokens that decide the scope, and a server that can speak first:**
   - `Options.OnAuthorize(connID, docName, token) (Grant, error)` is `OnAuthenticate` with the connection's ID and an answer that says whether the connection may write, so that one document has editors and viewers by their tokens. A provider that sends a new token gets the scope of the new grant;
   - `Options.OnStatelessFrom(connID, docName, payload)`, `Server.SendStateless(connID, payload)` and `Server.BroadcastStateless(docName, payload)`: answer one connection, tell a document;
-  - `Server.Disconnect(connID, code, reason)` and `Server.Connections(docName)`: end the connections of an access that was revoked.
+  - `Server.Disconnect(connID, code, reason)` and `Server.Connections(docName)`: end the connections of an access that was revoked;
+  - `Options.OnSessionOpen(connID, docName)`: called once a connection's session is open (token accepted, initial sync on its way), from where `SendStateless` reaches it;
+  - `Options.OnChangeFrom(connID, docName, update)`: `OnChange` with the connection the update came from, for a stored row with its author;
+  - `Server.SetReadOnly(connID, readOnly)`: take writing away from a connection that is open, for a document closed for editing while people are in it.
 - **`conformance/`:** generated editing scripts run through ygo, yjs 13.6.33 and yrs 0.28.1, alone and with replicas of each exchanging V1 and V2 updates, and the same updates delivered out of order, twice, in alternating formats and merged. Failing scripts are shrunk. See `conformance/README.md` for what is compared and what is not, and `conformance/FINDINGS.md` for what it found, in ygo and in yrs 0.25.0.
 
 ### Changed
@@ -43,8 +46,9 @@ file.
 
 ### Tests
 
-- `server/stress_test.go`: six clients on each of four documents insert and delete at once, a third reconnect halfway, a late joiner reads the result, over y-websocket and Hocuspocus frames; `YGO_STRESS` scales the edits and `YGO_STRESS_CLIENTS` the clients per document (run with 200: 800 connections). Under the race detector it found that a Hocuspocus connection was sent its room's updates before its token was accepted (in the unreleased mode above; fixed, `TestHocuspocus_NoFanOutBeforeTheToken`).
-- `testdata/e2e/backend` and `backend.mjs` (CI job `hocuspocus`): an application backend on the server, with editor and viewer tokens, a stored row per update, a snapshot, replay from the rows, a durability question answered over stateless messages, revocation and a restart, driven by `@hocuspocus/provider` 3.4.4. 26 checks. It is what found the empty update above and the missing scope per token.
+- `server/stress_test.go`: six clients on each of four documents insert and delete at once, a third reconnect halfway, a late joiner reads the result, over y-websocket and Hocuspocus frames; `YGO_STRESS` scales the edits, `YGO_STRESS_CLIENTS` the clients per document and `YGO_STRESS_DOCS` the documents (run with 200 clients on each of four documents, and with 200 on one under the race detector). Under the race detector it found that a Hocuspocus connection was sent its room's updates before its token was accepted (in the unreleased mode above; fixed, `TestHocuspocus_NoFanOutBeforeTheToken`).
+- `testdata/e2e/backend` and `backend.mjs` (CI job `hocuspocus`): an application backend on the server that keeps the contract of an existing Hocuspocus-compatible backend message for message: tokens that say who and whether to write, renewal on the open connection, a colour, the room's language and the state of the store when a session opens, a writer that stores a row per update with its author and answers a durability barrier when the store has caught up, presence, a heartbeat, a room ended while people are in it, revocation with 4403, a snapshot and a restart. Driven by `@hocuspocus/provider` 3.4.4, 44 checks. It is what found the empty update above and what the hooks above were added for.
+- `conformance`: six more profiles compare ygo with yjs on undo and redo (an undo manager per replica over text, rich text, arrays, maps, nested types and XML, with concurrent edits from others in between), on relative positions (their bytes, and where they resolve after everything that happened since) and on snapshots (what each restores).
 - `edit_model_test.go`: long editing sessions on a text and an array against a slice.
 - `benchmarks`: `BenchmarkB4_TransactionPerEdit`, and `TestBudget_EditingSession`: ceilings on time, allocations per edit, heap per character and stored size for a generated session of 100,000 edits.
 - New CI jobs: `conformance` (yjs and yrs references) and the providers in `hocuspocus`.

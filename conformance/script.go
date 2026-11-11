@@ -49,6 +49,15 @@ type Profile struct {
 	Astral bool
 	// Whole keeps every position off the middle of those characters.
 	Whole bool
+	// Undo adds undo and redo: every replica has an undo manager over the
+	// four roots that takes each of its own transactions as one step.
+	Undo bool
+	// Positions adds relative positions, made in the text of a replica and
+	// resolved by it at the end, after everything that happened since.
+	Positions bool
+	// Snapshots adds snapshots, restored at the end. Only scripts without
+	// garbage collection take them.
+	Snapshots bool
 }
 
 // Everything is the profile with every kind of step.
@@ -126,6 +135,9 @@ func Generate(seed uint64, replicas, steps int, profile Profile) Script {
 	add(profile.Map, "mset", "mset", "mdel")
 	add(profile.Nested, "mtext", "amap")
 	add(profile.XML, "xel", "xdel")
+	add(profile.Undo, "undo", "undo", "redo")
+	add(profile.Positions, "rpos")
+	add(profile.Snapshots, "snap")
 	text := func() string {
 		s := ""
 		for range 1 + rng.IntN(3) {
@@ -178,6 +190,8 @@ func Generate(seed uint64, replicas, steps int, profile Profile) Script {
 			step.Key, step.Val = pick(rng, keys), randomValue(rng, 0)
 		case "xel":
 			step.Tag, step.Attr, step.Text = pick(rng, tags), []string{pick(rng, keys[:4]), pick(rng, words)}, text()
+		case "rpos":
+			step.K = rng.IntN(2) // 1: the position belongs to what is before it
 		}
 		script.Steps = append(script.Steps, step)
 	}

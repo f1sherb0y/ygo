@@ -18,12 +18,15 @@ func (ygoImplementation) New(clientID uint64, gc bool) (Replica, error) {
 	// The roots get their types now, as the drivers of yjs and yrs give
 	// them: yjs cleans up formatting after remote changes only in a text
 	// it knows to be one, and ygo does the same.
-	ygo.NewText(d, "text")
-	ygo.NewArray(d, "arr")
-	ygo.NewMap(d, "map")
-	ygo.NewXmlFragment(d, "xml")
-	return &ygoReplica{d}, nil
+	text, arr, m, xml := ygo.NewText(d, "text"), ygo.NewArray(d, "arr"), ygo.NewMap(d, "map"), ygo.NewXmlFragment(d, "xml")
+	// Every transaction of the replica's own is one step to undo; what
+	// arrives from others (origin remoteOrigin) is none.
+	um := ygo.NewUndoManagerWithOptions(d, ygo.UndoManagerOptions{CaptureTimeout: -1}, text, arr, m, xml)
+	return &ygoReplica{doc: d, undo: um}, nil
 }
+
+// remoteOrigin is the origin of the updates a replica is given.
+const remoteOrigin = "remote"
 
 func (ygoImplementation) Merge(updates [][]byte, version int) (merged []byte, err error) {
 	defer guard(&err)
@@ -33,7 +36,12 @@ func (ygoImplementation) Merge(updates [][]byte, version int) (merged []byte, er
 	return ygo.MergeUpdates(updates)
 }
 
-type ygoReplica struct{ doc *ygo.Doc }
+type ygoReplica struct {
+	doc       *ygo.Doc
+	undo      *ygo.UndoManager
+	positions []ygo.RelativePosition
+	snapshots []ygo.Snapshot
+}
 
 // guard reports a panic as an error: one is a finding like any other.
 func guard(err *error) {
@@ -44,7 +52,62 @@ func guard(err *error) {
 
 func (r *ygoReplica) Step(step Step) (err error) {
 	defer guard(&err)
-	return applyStep(r.doc, step)
+	switch step.Op {
+	case "undo":
+		r.undo.Undo()
+	case "redo":
+		r.undo.Redo()
+	case "rpos":
+		text := ygo.NewText(r.doc, "text")
+		rtxn := r.doc.ReadTxn()
+		length := text.Length()
+		rtxn.Close()
+		pos, err := ygo.CreateRelativePositionFromTypeIndex(text, at(step.N, length), int64(-step.K))
+		if err != nil {
+			return err
+		}
+		r.positions = append(r.positions, pos)
+	case "snap":
+		if !r.doc.GC() {
+			r.snapshots = append(r.snapshots, ygo.CreateSnapshot(r.doc))
+		}
+	default:
+		return applyStep(r.doc, step)
+	}
+	return nil
+}
+
+// local is what the replica holds for itself: each position as it is
+// encoded and where it is now, each snapshot as the text and the array
+// it restores.
+func (r *ygoReplica) local() (map[string]any, error) {
+	positions := []any{}
+	for _, pos := range r.positions {
+		raw, err := ygo.EncodeRelativePosition(pos)
+		if err != nil {
+			return nil, err
+		}
+		entry := map[string]any{"bytes": fmt.Sprintf("%x", raw), "index": nil}
+		if abs, ok := ygo.CreateAbsolutePositionFromRelativePosition(r.doc, pos); ok {
+			entry["index"], entry["assoc"] = abs.Index, abs.Assoc
+		}
+		positions = append(positions, entry)
+	}
+	snapshots := []any{}
+	for _, snap := range r.snapshots {
+		// Through its bytes, as a snapshot kept somewhere would be.
+		decoded, err := ygo.DecodeSnapshot(ygo.EncodeSnapshot(snap))
+		if err != nil {
+			return nil, err
+		}
+		then, err := ygo.RestoreSnapshot(r.doc, decoded)
+		if err != nil {
+			return nil, err
+		}
+		restored := dump(then)
+		snapshots = append(snapshots, map[string]any{"text": restored["text"], "arr": restored["arr"], "map": restored["map"]})
+	}
+	return map[string]any{"positions": positions, "snapshots": snapshots}, nil
 }
 
 func (r *ygoReplica) StateVector() ([]byte, error) { return ygo.EncodeStateVector(r.doc), nil }
@@ -60,12 +123,16 @@ func (r *ygoReplica) Diff(sv []byte, version int) (diff []byte, err error) {
 func (r *ygoReplica) Apply(update []byte, version int) (err error) {
 	defer guard(&err)
 	if version == 2 {
-		return ygo.ApplyUpdateV2(r.doc, update)
+		return ygo.ApplyUpdateV2WithOrigin(r.doc, update, remoteOrigin)
 	}
-	return ygo.ApplyUpdate(r.doc, update)
+	return ygo.ApplyUpdateWithOrigin(r.doc, update, remoteOrigin)
 }
 
 func (r *ygoReplica) Dump() (out map[string]any, err error) {
 	defer guard(&err)
-	return dump(r.doc), nil
+	out = dump(r.doc)
+	if out[localKey], err = r.local(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

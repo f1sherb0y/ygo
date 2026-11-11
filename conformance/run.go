@@ -12,7 +12,15 @@ type Outcome struct {
 	Content any
 	// StateVector is the clock of every client after the final sync.
 	StateVector map[uint64]uint64
+	// Local is what each replica holds for itself, replica by replica:
+	// the positions it made, resolved now, and the snapshots it took,
+	// restored now. Implementations that do not report it leave nil.
+	Local []any
 }
+
+// localKey is the key of a dump under which a replica reports what it
+// holds for itself.
+const localKey = "$local"
 
 // normal brings a dump through JSON, so that numbers and containers compare
 // the same whichever implementation produced them.
@@ -135,9 +143,12 @@ func Run(script Script, impls ...Implementation) (Outcome, error) {
 		if err != nil {
 			return Outcome{}, fmt.Errorf("%s: %w", name(i), err)
 		}
+		local := d[localKey]
+		delete(d, localKey)
+		outcome.Local = append(outcome.Local, normal(local))
 		content, clocks := normal(d), decodeStateVector(sv)
 		if i == 0 {
-			outcome = Outcome{content, clocks}
+			outcome.Content, outcome.StateVector = content, clocks
 			continue
 		}
 		if !reflect.DeepEqual(content, outcome.Content) {

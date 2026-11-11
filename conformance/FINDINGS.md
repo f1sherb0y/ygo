@@ -39,7 +39,10 @@ answers with the scope; with it came the ways for the server to answer a
 connection, tell a document and close a connection
 (`SendStateless`, `BroadcastStateless`, `Disconnect`), without which
 a backend can neither confirm that an edit is stored nor end a revoked
-session.
+session. Keeping an existing backend's contract message for message then
+asked for three more: a moment to greet a connection (`OnSessionOpen`),
+whose an update is (`OnChangeFrom`), and taking writing away from a
+connection that is open (`SetReadOnly`).
 
 ### 5. Speed
 
@@ -123,9 +126,12 @@ without an error. Upgrading yrs fixes both.
 
 On Windows 11, amd64, Go 1.27.3, Node 24.12:
 
-- `TestDifferential` and `TestDelivery`: seeds 0 to 299 and 1000 to 1399
-  of each of the ten profiles, every arrangement in README.md, with yjs
-  13.6.33 and yrs 0.28.1.
+- `TestDifferential` and `TestDelivery`: seeds 0 to 299 of each of the
+  sixteen profiles, every arrangement in README.md, with yjs 13.6.33 and
+  yrs 0.28.1; seeds 1000 to 1399 of the ten profiles without undo,
+  positions and snapshots. The six profiles with them found no difference
+  between ygo and yjs; that they can was checked by breaking each of the
+  three in the ygo replica.
 - `TestFindings`: the three reproducers.
 - The module's fuzz targets (13), 45 seconds each, and the three that
   apply updates and undo again after the speed changes, 40 seconds each.
@@ -134,17 +140,20 @@ On Windows 11, amd64, Go 1.27.3, Node 24.12:
 - `go test -race ./...` on Linux (Go 1.26 in a container), with the stress
   test at `YGO_STRESS=2`, and the stress test alone under the race
   detector with 48 clients per document (192 connections, 240 edits each).
-  With 200 clients per document the race detector's memory did not fit the
-  container's 16 GB and the kernel ended the run; that size was run
-  without the detector only.
+  and with 200 clients on one document (the same edits, each sent to 199
+  others). Four documents of 200 clients at once did not fit the
+  container's 16 GB with the detector's memory and the kernel ended the
+  run; that size was run without the detector.
 - `server/stress_test.go`: 4 documents, 6 clients each, 120 edits per
   client, a third of the clients reconnecting halfway, one late joiner per
   document, over y-websocket and Hocuspocus frames. Also run with 960
   edits per client (`YGO_STRESS=8`), with 48 clients per document and 480
   edits each, and with 200 clients per document (800 connections, 96,000
   edits, each sent to 199 others), clients and server in one process.
-- `testdata/e2e/backend.mjs`: 26 checks of an application backend on the
-  server with provider 3.4.4 (see its head for the list).
+- `testdata/e2e/backend.mjs`: 44 checks of an application backend on the
+  server with provider 3.4.4 (see its head for the list). The web client
+  of the application whose contract it keeps was run against it unchanged
+  in Chromium, Firefox and WebKit, outside this repository.
 - `benchmarks.TestBudget_EditingSession`: 100,000 generated edits within
   the ceilings set there.
 - `testdata/e2e/hocuspocus-provider.mjs`: `@hocuspocus/provider` 4.8.0,

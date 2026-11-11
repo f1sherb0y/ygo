@@ -64,6 +64,13 @@ func haveNode() bool {
 	return err == nil
 }
 
+// editor is everything with what an editor adds to it.
+var editor = func() Profile {
+	p := Everything
+	p.Undo, p.Positions, p.Snapshots = true, true, true
+	return p
+}()
+
 type profileCase struct {
 	name     string
 	profile  Profile
@@ -80,6 +87,12 @@ var profiles = []profileCase{
 	{"map", Profile{Map: true}, 3, 40},
 	{"nested", Profile{Array: true, Map: true, Nested: true}, 3, 60},
 	{"xml", Profile{XML: true}, 3, 40},
+	{"text-undo", Profile{Text: true, Undo: true}, 3, 60},
+	{"rich-text-undo", Profile{Text: true, Format: true, Embed: true, Undo: true}, 3, 60},
+	{"collections-undo", Profile{Array: true, Map: true, Nested: true, XML: true, Undo: true}, 3, 60},
+	{"text-positions", Profile{Text: true, Astral: true, Positions: true}, 3, 60},
+	{"snapshots", Profile{Text: true, Format: true, Array: true, Map: true, Snapshots: true}, 3, 60},
+	{"editor", editor, 4, 120},
 	{"everything", Everything, 4, 120},
 	{"everything-long", Everything, 6, 400},
 }

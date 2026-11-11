@@ -18,7 +18,8 @@ import (
 
 // stressScale multiplies the size of the stress tests: YGO_STRESS=10 for a
 // soak, 1 (the default) for the ordinary test run. YGO_STRESS_CLIENTS sets
-// the number of clients per document (6).
+// the number of clients per document (6) and YGO_STRESS_DOCS the number of
+// documents (4).
 func stressScale() int {
 	if n, err := strconv.Atoi(os.Getenv("YGO_STRESS")); err == nil && n > 0 {
 		return n
@@ -65,7 +66,10 @@ func (e *editor) content() (string, string) {
 // with the same text.
 func TestStress_ConcurrentEditorsConverge(t *testing.T) {
 	scale := stressScale()
-	const documents = 4
+	documents := 4
+	if n, err := strconv.Atoi(os.Getenv("YGO_STRESS_DOCS")); err == nil && n > 0 {
+		documents = n
+	}
 	perDocument := 6
 	if n, err := strconv.Atoi(os.Getenv("YGO_STRESS_CLIENTS")); err == nil && n > 0 {
 		perDocument = n

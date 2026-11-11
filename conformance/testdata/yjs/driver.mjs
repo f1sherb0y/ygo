@@ -86,23 +86,67 @@ function apply(doc, step) {
 }
 
 const docs = new Map()
+// What a replica holds for itself: its undo manager, the relative positions
+// it made and the snapshots it took.
+const own = new Map()
+
+function local(doc) {
+  const mine = own.get(doc)
+  return {
+    positions: mine.positions.map((pos) => {
+      const abs = Y.createAbsolutePositionFromRelativePosition(pos, doc)
+      const entry = { bytes: hex(Y.encodeRelativePosition(pos)), index: null }
+      if (abs) { entry.index = abs.index; entry.assoc = abs.assoc }
+      return entry
+    }),
+    snapshots: mine.snapshots.map((snap) => {
+      const then = dump(Y.createDocFromSnapshot(doc, Y.decodeSnapshot(Y.encodeSnapshot(snap))))
+      return { text: then.text, arr: then.arr, map: then.map }
+    }),
+  }
+}
+
+// step runs one step: an edit in a transaction, or one of the steps that
+// are no edit.
+function step(doc, s) {
+  const mine = own.get(doc)
+  switch (s.op) {
+    case 'undo': mine.undo.undo(); break
+    case 'redo': mine.undo.redo(); break
+    case 'rpos': {
+      const text = doc.getText('text')
+      mine.positions.push(Y.createRelativePositionFromTypeIndex(text, at(s.n, text.length), s.k ? -1 : 0))
+      break
+    }
+    case 'snap': if (!doc.gc) mine.snapshots.push(Y.snapshot(doc)); break
+    default: doc.transact(() => apply(doc, s))
+  }
+}
 
 function handle(request) {
   const doc = docs.get(request.id)
   switch (request.cmd) {
-    case 'reset': docs.clear(); return {}
-    case 'new': docs.set(request.id, newDoc(request.client, request.gc)); return {}
-    case 'step': doc.transact(() => apply(doc, request.step)); return {}
+    case 'reset': docs.clear(); own.clear(); return {}
+    case 'new': {
+      const made = newDoc(request.client, request.gc)
+      docs.set(request.id, made)
+      // Every transaction of the replica's own is one step to undo; what
+      // arrives from others (origin 'remote') is none.
+      const roots = [made.getText('text'), made.getArray('arr'), made.getMap('map'), made.getXmlFragment('xml')]
+      own.set(made, { undo: new Y.UndoManager(roots, { captureTimeout: -1 }), positions: [], snapshots: [] })
+      return {}
+    }
+    case 'step': step(doc, request.step); return {}
     case 'sv': return { hex: hex(Y.encodeStateVector(doc)) }
     case 'diff': {
       const sv = unhex(request.sv)
       return { hex: hex(request.v === 2 ? Y.encodeStateAsUpdateV2(doc, sv) : Y.encodeStateAsUpdate(doc, sv)) }
     }
     case 'apply':
-      if (request.v === 2) Y.applyUpdateV2(doc, unhex(request.update))
-      else Y.applyUpdate(doc, unhex(request.update))
+      if (request.v === 2) Y.applyUpdateV2(doc, unhex(request.update), 'remote')
+      else Y.applyUpdate(doc, unhex(request.update), 'remote')
       return {}
-    case 'dump': return { dump: dump(doc) }
+    case 'dump': return { dump: { ...dump(doc), $local: local(doc) } }
     case 'merge': {
       const updates = request.updates.map(unhex)
       return { hex: hex(request.v === 2 ? Y.mergeUpdatesV2(updates) : Y.mergeUpdates(updates)) }
