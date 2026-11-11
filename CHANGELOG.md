@@ -29,7 +29,7 @@ file.
   - the document of a connection is the one its first frame names (`DocNameFn` is not called; `OnConnect` and `ReadOnly` get that name), and a connection that names none within `Options.HandshakeTimeout` (10 seconds) is closed;
   - with `OnAuthenticate` set, nothing is sent to a connection, by the server or from its room, and nothing but Auth is accepted from it until its token was accepted; anything else closes it with 4401;
   - every update is answered with a SyncStatus (1 applied, 0 refused on a read-only connection);
-  - one connection serves one document; a frame for another closes it with 1008;
+  - one connection carries several documents, as providers that share a `HocuspocusProviderWebsocket` use it: each is a session with its own token, scope and connection ID, and a token refused for a document that joined later ends that session only;
   - a handler in this mode serves no y-websocket clients.
 - **Tokens that decide the scope, and a server that can speak first:**
   - `Options.OnAuthorize(connID, docName, token) (Grant, error)` is `OnAuthenticate` with the connection's ID and an answer that says whether the connection may write, so that one document has editors and viewers by their tokens. A provider that sends a new token gets the scope of the new grant;

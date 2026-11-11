@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,23 +139,137 @@ func TestHocuspocus_DocumentComesFromTheFrames(t *testing.T) {
 	}
 }
 
-func TestHocuspocus_OneDocumentPerConnection(t *testing.T) {
-	url, _ := startTestServer(t, server.Options{Hocuspocus: true, OriginPatterns: []string{"*"}})
-	c := hpDial(t, url, "one")
-	c.send(syncpkg.EncodeSyncStep1([]byte{0}))
-	c.until(isType(syncpkg.MessageSync))
-	c.name = "two"
-	c.send(syncpkg.EncodeSyncStep1([]byte{0}))
-	c.name = "one"
+// One connection carries several documents, as providers that share a
+// websocket use it: each is a session of its own.
+func TestHocuspocus_SeveralDocumentsOnOneConnection(t *testing.T) {
+	var mu sync.Mutex
+	joined, left := map[string]string{}, []string{}
+	url, srv := startTestServer(t, server.Options{
+		Hocuspocus:     true,
+		OriginPatterns: []string{"*"},
+		OnConnect: func(connID, docName string, _ *http.Request) error {
+			mu.Lock()
+			joined[docName] = connID
+			mu.Unlock()
+			return nil
+		},
+		OnDisconnect: func(_, docName string) {
+			mu.Lock()
+			left = append(left, docName)
+			mu.Unlock()
+		},
+		OnAuthorize: func(_, docName, token string) (server.Grant, error) {
+			if token != "key to "+docName {
+				return server.Grant{}, errors.New("wrong key")
+			}
+			return server.Grant{ReadOnly: docName == "two"}, nil
+		},
+	})
+	shared := hpDial(t, url, "one")
+	// as speaks for one document of the shared connection.
+	as := func(name string) *hpConn { return &hpConn{t, shared.ws, name} }
+	// next reads the next frame whatever document it is for.
+	next := func() (string, *syncpkg.Frame) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, raw, err := shared.ws.Read(ctx)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		route, rest, err := syncpkg.DecodeRoute(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, _, err := syncpkg.DecodeEnvelope(rest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return route, frame
+	}
+	until := func(name string, want func(*syncpkg.Frame) bool) *syncpkg.Frame {
+		t.Helper()
+		for range 40 {
+			if route, frame := next(); route == name && want(frame) {
+				return frame
+			}
+		}
+		t.Fatalf("the frame for %q never came", name)
+		return nil
+	}
+
+	as("one").send(syncpkg.EncodeAuthToken("key to one"))
+	as("two").send(syncpkg.EncodeAuthToken("key to two"))
+	if f := until("one", isType(syncpkg.MessageAuth)); string(f.Payload) != syncpkg.ScopeReadWrite {
+		t.Errorf("document one: scope %q", f.Payload)
+	}
+	if f := until("two", isType(syncpkg.MessageAuth)); string(f.Payload) != syncpkg.ScopeReadOnly {
+		t.Errorf("document two: scope %q", f.Payload)
+	}
+	// Each document has a connection ID of its own.
+	mu.Lock()
+	one, two := joined["one"], joined["two"]
+	mu.Unlock()
+	if one == "" || two == "" || one == two {
+		t.Fatalf("connection IDs %q and %q", one, two)
+	}
+
+	// What is written to one document is acknowledged for it, and reaches
+	// its room and not the other's.
+	watcher := hpDial(t, url, "one")
+	watcher.send(syncpkg.EncodeAuthToken("key to one"))
+	watcher.until(isType(syncpkg.MessageSync))
+	as("one").send(syncpkg.EncodeSyncUpdate(update(t, "k", "v")))
+	if ack := until("one", isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 1 {
+		t.Error("document one refused the update")
+	}
+	watcher.until(func(f *syncpkg.Frame) bool { return f.Type == syncpkg.MessageSync && f.SyncSub == syncpkg.SyncUpdate })
+	as("two").send(syncpkg.EncodeSyncUpdate(update(t, "k", "v")))
+	if ack := until("two", isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 0 {
+		t.Error("document two, read-only, took the update")
+	}
+	// The server speaks to one of them.
+	if !srv.SendStateless(two, "for two") {
+		t.Fatal("document two's session was not found")
+	}
+	if f := until("two", isType(syncpkg.MessageStateless)); string(f.Payload) != "for two" {
+		t.Errorf("stateless %q", f.Payload)
+	}
+
+	// A third document with a wrong token is turned away, and the
+	// connection goes on with the two it has.
+	as("three").send(syncpkg.EncodeAuthToken("guess"))
+	if f := until("three", isType(syncpkg.MessageAuth)); f.AuthSub != syncpkg.AuthPermissionDenied {
+		t.Errorf("document three: auth sub-type %d, want permission denied", f.AuthSub)
+	}
+	as("one").send(syncpkg.EncodeSyncUpdate(update(t, "k2", "v2")))
+	if ack := until("one", isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 1 {
+		t.Error("document one stopped working after another document was refused")
+	}
+	// It may try again with the right one.
+	as("three").send(syncpkg.EncodeAuthToken("key to three"))
+	if f := until("three", isType(syncpkg.MessageAuth)); f.AuthSub != syncpkg.AuthAuthenticated {
+		t.Errorf("document three, second try: auth sub-type %d", f.AuthSub)
+	}
+
+	// When the connection ends, every document on it has left.
+	shared.ws.Close(websocket.StatusNormalClosure, "")
+	deadline := time.Now().Add(5 * time.Second)
 	for {
-		frame, status := c.read()
-		if frame != nil {
-			continue
+		mu.Lock()
+		gone := strings.Join(left, ",")
+		mu.Unlock()
+		// "three" left twice: refused once, then with the connection.
+		if strings.Count(gone, "one") == 1 && strings.Count(gone, "two") == 1 && strings.Count(gone, "three") == 2 {
+			break
 		}
-		if status != websocket.StatusPolicyViolation {
-			t.Errorf("closed with %d, want %d", status, websocket.StatusPolicyViolation)
+		if time.Now().After(deadline) {
+			t.Fatalf("left: %s", gone)
 		}
-		return
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := srv.Connections("two"); len(got) != 0 {
+		t.Errorf("document two still has %v", got)
 	}
 }
 

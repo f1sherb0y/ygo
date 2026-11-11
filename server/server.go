@@ -96,10 +96,14 @@ type Options struct {
 	//     for different documents connect to the same URL. OnConnect and
 	//     ReadOnly get that name. A connection whose first frame does not
 	//     arrive within HandshakeTimeout is closed.
-	//   - One connection serves one document. A frame for another
-	//     document closes it with 1008; a provider that shares its
-	//     websocket between documents (HocuspocusProviderWebsocket) is
-	//     not supported, give each provider its own.
+	//   - One connection can carry several documents, as providers that
+	//     share a HocuspocusProviderWebsocket use it: each document named
+	//     on it is a session of its own, with its own token, scope,
+	//     connection ID and OnConnect / OnDisconnect. A token refused for a
+	//     document that joined a connection later ends that session and
+	//     leaves the others; refused for the document the connection began
+	//     with, it closes the connection. Disconnect closes the whole
+	//     connection, with every document on it.
 	//   - With OnAuthenticate set, nothing is sent and no other message is
 	//     accepted until it has accepted a token; anything else first
 	//     closes the connection with 4401. Providers send the token first.
@@ -1009,8 +1013,30 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		accepted = true
 	}
 
-	// Resolve read-only status before the read loop starts, so the
-	// handler (read on its own goroutine) sees a settled flag.
+	c.request = r
+	// The documents that join this connection later leave with it, before
+	// the one it began with.
+	defer func() {
+		for _, sibling := range c.siblings {
+			s.endSibling(r.Context(), sibling)
+		}
+	}()
+	if !s.startSession(c, route, docName, r) {
+		return
+	}
+	if first != nil && !c.handleMessage(first) {
+		return
+	}
+
+	c.readLoop(r.Context())
+}
+
+// startSession settles what a connection may do and opens its sync: at
+// once, or for a Hocuspocus connection that needs a token, when that was
+// accepted. It reports false when the initial sync could not be sent.
+func (s *Server) startSession(c *conn, route, docName string, r *http.Request) bool {
+	// Resolve read-only status before the first frame is handled, so the
+	// handler sees a settled flag.
 	if s.opts.ReadOnly != nil {
 		c.handler.ReadOnly = s.opts.ReadOnly(docName, r)
 	}
@@ -1037,17 +1063,70 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	if !c.handler.RequireAuth {
 		c.waiting.Store(false)
 		if err := c.handler.SendInitialSync(); err != nil {
-			return
+			return false
 		}
 		if s.opts.OnSessionOpen != nil {
 			s.opts.OnSessionOpen(c.idForLog, docName)
 		}
 	}
-	if first != nil && !c.handleMessage(first) {
-		return
-	}
+	return true
+}
 
-	c.readLoop(r.Context())
+// openSibling joins another document to a Hocuspocus connection: a session
+// of its own that reads and writes through the connection c began. It
+// returns nil when it closed the connection, and an error when only this
+// document was turned away.
+func (s *Server) openSibling(c *conn, route string) (*conn, error) {
+	docName := syncpkg.RouteDocName(route)
+	if docName == "" {
+		c.closeFromServer(websocket.StatusPolicyViolation, "a frame names no document")
+		return nil, nil
+	}
+	ctx := c.request.Context()
+	sibling, _, ok, err := s.admitConn(ctx, docName, c.ws)
+	if err != nil || !ok {
+		// A limit, or the document did not load: the connection closes as
+		// it does when its first document meets the same.
+		code, reason := websocket.StatusTryAgainLater, "server limit reached"
+		switch {
+		case err == nil:
+			code, reason = websocket.StatusPolicyViolation, "document connection limit reached"
+		case !errors.Is(err, errServerDocsFull) && !errors.Is(err, errServerConnsFull):
+			code, reason = websocket.StatusInternalError, closeReason(fmt.Sprintf("load doc: %v", err))
+		}
+		c.closeFromServer(code, reason)
+		return nil, nil
+	}
+	// It writes through the first document's queue and socket.
+	sibling.shared = true
+	sibling.queue = c.queue
+	sibling.raw = c.raw
+	sibling.request = c.request
+	sibling.first = c
+	if s.opts.OnConnect != nil {
+		if err := s.opts.OnConnect(sibling.idForLog, docName, c.request); err != nil {
+			s.releaseConn(ctx, sibling.state, sibling)
+			return nil, err
+		}
+	}
+	sibling.accepted = true
+	if !s.startSession(sibling, route, docName, c.request) {
+		s.endSibling(ctx, sibling)
+		return nil, nil
+	}
+	if c.siblings == nil {
+		c.siblings = map[string]*conn{}
+	}
+	c.siblings[route] = sibling
+	return sibling, nil
+}
+
+// endSibling takes a document that joined a connection later off it.
+func (s *Server) endSibling(ctx context.Context, sibling *conn) {
+	s.releaseConn(ctx, sibling.state, sibling)
+	if sibling.accepted && s.opts.OnDisconnect != nil {
+		s.opts.OnDisconnect(sibling.idForLog, sibling.state.name)
+	}
 }
 
 // readRoute reads the first frame of a Hocuspocus connection and returns
@@ -1326,10 +1405,14 @@ func (s *Server) releaseConn(ctx context.Context, state *docState, c *conn) {
 	// Stop the queue now: its backlog is dropped and a waiting reply fails.
 	// A cause chosen earlier (an overflow the writer is about to close with
 	// 1013, say) is kept; its owner still closes.
-	if c.queue != nil {
-		c.queue.terminate(causeReleased)
+	// A document that joined a connection later leaves it without ending
+	// it: the queue and the socket are the first document's.
+	if !c.shared {
+		if c.queue != nil {
+			c.queue.terminate(causeReleased)
+		}
+		defer c.finishTransport()
 	}
-	defer c.finishTransport()
 
 	// Drop the global connection count. releaseConn runs exactly once per
 	// admitted connection (serveWS defers it only past a successful
@@ -1471,6 +1554,19 @@ type conn struct {
 	// the connection handles its first frame.
 	route       string
 	routePrefix []byte
+
+	// request is the upgrade request of the connection.
+	request *http.Request
+
+	// siblings are the other documents of a Hocuspocus connection, by
+	// routing key: sessions of their own that share this connection's
+	// queue and socket (shared is set on them). Only the connection's read
+	// goroutine touches the map. accepted is set on a sibling OnConnect let
+	// in.
+	siblings map[string]*conn
+	shared   bool
+	accepted bool
+	first    *conn // on a sibling: the connection it joined
 
 	// waiting is set on a Hocuspocus connection from before it joins its
 	// room until its route is known and, where a token is required, the
@@ -1963,11 +2059,31 @@ func (c *conn) handleMessage(raw []byte) bool {
 			return false
 		}
 		if route != c.route {
-			c.closeFromServer(websocket.StatusPolicyViolation, "one document per connection")
-			return false
+			return c.handleSibling(route, rest)
 		}
 		raw = rest
 	}
+	return c.handleEnvelope(raw)
+}
+
+// handleSibling handles a message for another document than the one the
+// connection began with.
+func (c *conn) handleSibling(route string, raw []byte) bool {
+	sibling := c.siblings[route]
+	if sibling == nil {
+		var err error
+		if sibling, err = c.server.openSibling(c, route); sibling == nil {
+			// Turned away by OnConnect: that document only. Otherwise the
+			// connection is closed.
+			return err != nil
+		}
+	}
+	return sibling.handleEnvelope(raw)
+}
+
+// handleEnvelope handles one message of this connection's document. It
+// returns false once it has closed the connection.
+func (c *conn) handleEnvelope(raw []byte) bool {
 	frame, _, err := syncpkg.DecodeEnvelope(raw)
 	if err != nil {
 		// Malformed frame — close with a protocol-error reason.
@@ -1977,6 +2093,9 @@ func (c *conn) handleMessage(raw []byte) bool {
 	}
 	if err := c.handler.HandleFrame(frame); err != nil {
 		if errors.Is(err, syncpkg.ErrUnauthenticated) {
+			if c.shared {
+				return c.leave()
+			}
 			c.closeFromServer(syncpkg.CloseStatusUnauthorized, "unauthorized")
 			return false
 		}
@@ -1995,9 +2114,22 @@ func (c *conn) handleMessage(raw []byte) bool {
 	// 4401 code so Hocuspocus clients see "unauthorized" rather
 	// than a generic disconnect.
 	if c.handler.AuthFailed {
+		if c.shared {
+			// The provider of this document has been told; the other
+			// documents of the connection go on.
+			return c.leave()
+		}
 		c.closeFromServer(syncpkg.CloseStatusUnauthorized, "unauthorized")
 		return false
 	}
+	return true
+}
+
+// leave ends the session of a document that joined a connection later and
+// keeps the connection. It returns true: the connection is still open.
+func (c *conn) leave() bool {
+	delete(c.first.siblings, c.route)
+	c.server.endSibling(c.request.Context(), c)
 	return true
 }
 

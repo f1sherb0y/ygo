@@ -1,4 +1,5 @@
-// Runs stock @hocuspocus/provider 4.8.0, 3.4.4 and 2.15.3 against the ygo
+// Runs stock @hocuspocus/provider 4.8.0, 3.4.4 and 2.15.3, each on a socket
+// of its own and several on one, against the ygo
 // server in Hocuspocus mode (testdata/e2e/hpserver) and exits non-zero if
 // any check fails.
 //
@@ -111,9 +112,50 @@ async function run (v, url) {
   check(`${tag} and takes no edits`, r2.map.get('nope') === undefined)
 }
 
+// Several providers on one websocket, as an application with several
+// documents open uses them: each document is a session of its own.
+async function shared (v, url) {
+  const tag = `provider ${v}, shared socket:`
+  const { HocuspocusProvider, HocuspocusProviderWebsocket } = await import(PACKAGES[v])
+  const socket = new HocuspocusProviderWebsocket({ url, WebSocketPolyfill: WebSocket })
+  const on = (name, token = 'ok') => {
+    const doc = new Y.Doc()
+    const events = { failed: null, synced: false }
+    const p = new HocuspocusProvider({
+      websocketProvider: socket,
+      name,
+      document: doc,
+      token,
+      onSynced: () => { events.synced = true },
+      onAuthenticationFailed: ({ reason }) => { events.failed = reason }
+    })
+    if (typeof p.attach === 'function') p.attach()
+    open.push(p)
+    return { p, doc, map: doc.getMap('m'), events }
+  }
+  const one = on(`shared-one-${v}`)
+  const two = on(`shared-two-${v}`)
+  const peerOne = await connect(v, url, `shared-one-${v}`)
+  const peerTwo = await connect(v, url, `shared-two-${v}`)
+  check(`${tag} two documents sync over it`, await waitFor(() => one.events.synced && two.events.synced))
+  one.map.set('doc', 'one')
+  two.map.set('doc', 'two')
+  check(`${tag} each reaches its own room`, await waitFor(() => peerOne.map.get('doc') === 'one' && peerTwo.map.get('doc') === 'two'))
+  peerTwo.map.set('back', 'two')
+  check(`${tag} and hears from it`, await waitFor(() => two.map.get('back') === 'two') && one.map.get('back') === undefined)
+  check(`${tag} changes are acknowledged per document`, await waitFor(() => one.p.unsyncedChanges === 0 && two.p.unsyncedChanges === 0))
+
+  const bad = on(`shared-three-${v}`, 'bad')
+  check(`${tag} a refused token is reported for its document`, await waitFor(() => bad.events.failed === 'bad-token'), `reason ${bad.events.failed}`)
+  one.map.set('after', 'refusal')
+  check(`${tag} and the other documents go on`, await waitFor(() => peerOne.map.get('after') === 'refusal'))
+  try { socket.destroy() } catch {}
+}
+
 const server = await startServer()
 try {
   for (const v of [4, 3, 2]) await run(v, server.url)
+  for (const v of [4, 3, 2]) await shared(v, server.url)
 } catch (error) {
   console.error(error)
   failures++

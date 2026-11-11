@@ -189,7 +189,7 @@ defer unsub()
 
 ### Known gaps
 
-- **Hocuspocus is a mode of the server, not an addition to it.** A handler with `Options.Hocuspocus` serves `@hocuspocus/provider` (2.15, 3.4 and 4.8 are checked in CI) and no `y-websocket` clients; one connection serves one document, so providers that share a `HocuspocusProviderWebsocket` between documents are refused. Hocuspocus's server extensions are JavaScript and do not exist here.
+- **Hocuspocus is a mode of the server, not an addition to it.** A handler with `Options.Hocuspocus` serves `@hocuspocus/provider` (2.15, 3.4 and 4.8 are checked in CI) and no `y-websocket` clients. Hocuspocus's server extensions are JavaScript and do not exist here.
 - **Message size.** The server reads client messages up to 4 MiB by default. A larger one (the first sync of a larger document) closes the connection with 1009, and the client reconnects and resends it in a loop. Raise `ReadLimit` (`yserve -read-limit`) above your largest document.
 - **Any values.** An object with more than one key comes back with its keys sorted, and a format attribute set to undefined comes back as null; see [Strings and values](#strings-and-values).
 - **Speed.** Applying edits is in the range of yjs on a real editing trace, and V2 encoding about 4× slower. The other workloads have no yjs timing from the same machine. `benchmarks.TestBudget_EditingSession` holds ceilings on time, allocations and memory for an editing session. See [Benchmarks](#benchmarks).
@@ -272,7 +272,7 @@ Byte equality does not extend to objects with more than one key, whose keys ygo 
 | `y-leveldb`, `y-indexeddb` | Node / browser | Persistence backends | Ygo's `persist/sqlite` is a Go-native equivalent |
 | **Ygo** | **Go** | **CRDT engine + WS server + persistence in one monorepo, pure-Go for native mobile** | **This project** |
 
-If you run a `y-websocket` deployment and want to move the server side to Go (no Node runtime, one binary), ygo is an option; read the [known gaps](#known-gaps) first. A Hocuspocus deployment can keep its providers and point them at `yserve -hocuspocus`, if it can do without the JavaScript extensions of Hocuspocus and gives every document its own connection; Go programs can also join a Hocuspocus server as clients. If you're starting fresh and your team is comfortable with Node, Hocuspocus is the mature choice.
+If you run a `y-websocket` deployment and want to move the server side to Go (no Node runtime, one binary), ygo is an option; read the [known gaps](#known-gaps) first. A Hocuspocus deployment can keep its providers and point them at `yserve -hocuspocus`, if it can do without the JavaScript extensions of Hocuspocus; Go programs can also join a Hocuspocus server as clients. If you're starting fresh and your team is comfortable with Node, Hocuspocus is the mature choice.
 
 ## Benchmarks
 

@@ -133,9 +133,10 @@ the provider's `unsyncedChanges`. What differs from a Hocuspocus server:
 
 - The document is the name the provider is given (`name:`), whatever
   the URL path. `-path-prefix` still decides which paths are served.
-- One connection serves one document. Providers that share one
-  `HocuspocusProviderWebsocket` between documents are closed with 1008
-  on the second document; give each provider its own connection.
+- Providers that share one `HocuspocusProviderWebsocket` work: every
+  document named on a connection is a session of its own, with its own
+  token and scope. A token refused for a document that joined later
+  ends that document's session only.
 - In this mode the handler serves no `y-websocket` clients. Embedders
   who need both mount two `server.Server`s; they do not share documents.
 - yserve itself checks no tokens. Embed the `server` package and set

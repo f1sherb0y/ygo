@@ -157,6 +157,7 @@ On Windows 11, amd64, Go 1.27.3, Node 24.12:
 - `benchmarks.TestBudget_EditingSession`: 100,000 generated edits within
   the ceilings set there.
 - `testdata/e2e/hocuspocus-provider.mjs`: `@hocuspocus/provider` 4.8.0,
-  3.4.4 and 2.15.3 against the ygo server, 48 checks.
+  3.4.4 and 2.15.3 against the ygo server, each on a socket of its own and
+  several on one, 66 checks.
 
 None of this is a proof. See "What is not covered" in README.md.
