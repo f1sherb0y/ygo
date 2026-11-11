@@ -984,10 +984,14 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		if s.opts.OnAuthenticate != nil {
 			// Nothing of the document leaves before the token is accepted.
 			c.handler.RequireAuth = true
-			c.handler.OnAuthenticated = c.handler.SendInitialSync
+			c.handler.OnAuthenticated = func() error {
+				c.waiting.Store(false)
+				return c.handler.SendInitialSync()
+			}
 		}
 	}
 	if !c.handler.RequireAuth {
+		c.waiting.Store(false)
 		if err := c.handler.SendInitialSync(); err != nil {
 			return
 		}
@@ -1418,6 +1422,14 @@ type conn struct {
 	// the connection handles its first frame.
 	route       string
 	routePrefix []byte
+
+	// waiting is set on a Hocuspocus connection from before it joins its
+	// room until its route is known and, where a token is required, the
+	// token was accepted. What its room sends meanwhile is not for it:
+	// enqueue drops it, and the sync that opens the session brings the
+	// document and the presence as they are then. Clearing it is also what
+	// publishes route and routePrefix to the goroutines that fan out.
+	waiting atomic.Bool
 }
 
 var connIDCounter atomic.Uint64
@@ -1434,6 +1446,7 @@ func (s *Server) newConn(state *docState, ws *websocket.Conn) *conn {
 		queue:    newSendQueue(s.maxSendQueue(), s.maxSendQueueBytes(), s.writeTimeout()),
 		idForLog: id,
 	}
+	c.waiting.Store(s.opts.Hocuspocus)
 	h := syncpkg.New(state.doc, state.awareness, id)
 	h.Send = c.reply
 	h.Broadcast = c.broadcast
@@ -1475,6 +1488,9 @@ func (c *conn) routed(envelope []byte) []byte {
 // connection has fallen behind its bound, the append stops its queue
 // instead and the writer closes it with 1013; the overflow is counted once.
 func (c *conn) enqueue(envelope []byte) {
+	if c.waiting.Load() {
+		return
+	}
 	if c.queue.pushFanout(c.routed(envelope)) && c.server != nil {
 		c.server.slowClientsClosed.Add(1)
 	}

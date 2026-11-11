@@ -261,3 +261,34 @@ func TestHocuspocus_FirstFrameMustNameADocument(t *testing.T) {
 		t.Errorf("a silent client was kept for %v", waited)
 	}
 }
+
+// A connection that has named its document but not shown a token is in the
+// room's list already. What the room sends must still not reach it.
+func TestHocuspocus_NoFanOutBeforeTheToken(t *testing.T) {
+	url, _ := startTestServer(t, server.Options{
+		Hocuspocus:     true,
+		OriginPatterns: []string{"*"},
+		OnAuthenticate: func(_, token string) error {
+			if token != "let me in" {
+				return errors.New("no")
+			}
+			return nil
+		},
+	})
+	// An Auth message of a kind the server does not know is ignored: the
+	// connection stays, unauthenticated.
+	lurker := hpDial(t, url, "secret")
+	lurker.send([]byte{byte(syncpkg.MessageAuth), 9})
+
+	member := hpDial(t, url, "secret")
+	member.send(syncpkg.EncodeAuthToken("let me in"))
+	member.until(isType(syncpkg.MessageSync))
+	member.send(syncpkg.EncodeSyncUpdate(update(t, "k", "v")))
+	member.until(isType(syncpkg.MessageSyncStatus))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, raw, err := lurker.ws.Read(ctx); err == nil {
+		t.Errorf("a connection without a token was sent % x", raw)
+	}
+}
