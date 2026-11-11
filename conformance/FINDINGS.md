@@ -132,7 +132,11 @@ On Windows 11, amd64, Go 1.27.3, Node 24.12:
 - `edit_model_test.go`: 30,000 edits on a text and 20,000 on an array, a
   transaction each, against a slice, four seeds each.
 - `go test -race ./...` on Linux (Go 1.26 in a container), with the stress
-  test at `YGO_STRESS=2`.
+  test at `YGO_STRESS=2`, and the stress test alone under the race
+  detector with 48 clients per document (192 connections, 240 edits each).
+  With 200 clients per document the race detector's memory did not fit the
+  container's 16 GB and the kernel ended the run; that size was run
+  without the detector only.
 - `server/stress_test.go`: 4 documents, 6 clients each, 120 edits per
   client, a third of the clients reconnecting halfway, one late joiner per
   document, over y-websocket and Hocuspocus frames. Also run with 960
