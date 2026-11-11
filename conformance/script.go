@@ -49,6 +49,8 @@ type Profile struct {
 	Astral bool
 	// Whole keeps every position off the middle of those characters.
 	Whole bool
+	// Subdocs adds subdocuments set under keys of the map.
+	Subdocs bool
 	// Undo adds undo and redo: every replica has an undo manager over the
 	// four roots that takes each of its own transactions as one step.
 	Undo bool
@@ -135,6 +137,7 @@ func Generate(seed uint64, replicas, steps int, profile Profile) Script {
 	add(profile.Map, "mset", "mset", "mdel")
 	add(profile.Nested, "mtext", "amap")
 	add(profile.XML, "xel", "xdel")
+	add(profile.Subdocs, "msub")
 	add(profile.Undo, "undo", "undo", "redo")
 	add(profile.Positions, "rpos")
 	add(profile.Snapshots, "snap")
@@ -182,7 +185,7 @@ func Generate(seed uint64, replicas, steps int, profile Profile) Script {
 			}
 		case "mset":
 			step.Key, step.Val = pick(rng, keys), randomValue(rng, 0)
-		case "mdel":
+		case "mdel", "msub":
 			step.Key = pick(rng, keys)
 		case "mtext":
 			step.Key, step.S = pick(rng, keys), text()

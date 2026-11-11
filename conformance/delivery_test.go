@@ -82,7 +82,7 @@ func checkDelivery(script Script, seed uint64, impls []Implementation) string {
 	content := func(r Replica) (any, error) {
 		d, err := r.Dump()
 		delete(d, localKey) // delivery is about the document
-		return normal(d), err
+		return relabel(normal(d)), err
 	}
 	differs := func(what string, got any) string {
 		a, _ := json.Marshal(want.Content)

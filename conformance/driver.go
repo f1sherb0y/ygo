@@ -32,6 +32,13 @@ type Replica interface {
 	Dump() (map[string]any, error)
 }
 
+// Resolver is a replica that can say where relative positions, made by
+// any replica and given as their bytes, are in its text now: an index, or
+// nil where the position is gone.
+type Resolver interface {
+	Resolve(positions [][]byte) ([]any, error)
+}
+
 // Driver is a reference implementation in a child process that reads one
 // JSON command per line and answers with one JSON line (yjs/driver.mjs,
 // yrs/src/main.rs).
@@ -149,6 +156,19 @@ func (r *driverReplica) Diff(sv []byte, version int) ([]byte, error) {
 func (r *driverReplica) Apply(update []byte, version int) error {
 	_, err := r.d.call(map[string]any{"cmd": "apply", "id": r.id, "update": hex.EncodeToString(update), "v": version})
 	return err
+}
+
+func (r *driverReplica) Resolve(positions [][]byte) ([]any, error) {
+	encoded := make([]string, len(positions))
+	for i, p := range positions {
+		encoded[i] = hex.EncodeToString(p)
+	}
+	a, err := r.d.call(map[string]any{"cmd": "resolve", "id": r.id, "positions": encoded})
+	if err != nil {
+		return nil, err
+	}
+	indexes, _ := a.Dump["indexes"].([]any)
+	return indexes, nil
 }
 
 func (r *driverReplica) Dump() (map[string]any, error) {

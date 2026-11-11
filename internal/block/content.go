@@ -172,11 +172,13 @@ func (c Content) Copy() Content {
 }
 
 // CopyableForUndo reports whether Copy produces a faithful, fully
-// independent restoration for this content kind. False for Move and
-// Doc, which the UndoManager does not restore.
+// independent restoration for this content kind. False for Move, which
+// the UndoManager does not restore. A subdocument is restored as yjs
+// restores it (ContentDoc.copy): a new reference with the same GUID and
+// options.
 func (c Content) CopyableForUndo() bool {
 	switch c.Kind {
-	case KindMove, KindDoc:
+	case KindMove:
 		return false
 	default:
 		return true

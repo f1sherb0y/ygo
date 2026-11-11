@@ -110,6 +110,22 @@ func (r *ygoReplica) local() (map[string]any, error) {
 	return map[string]any{"positions": positions, "snapshots": snapshots}, nil
 }
 
+func (r *ygoReplica) Resolve(positions [][]byte) (out []any, err error) {
+	defer guard(&err)
+	for _, raw := range positions {
+		pos, err := ygo.DecodeRelativePosition(raw)
+		if err != nil {
+			return nil, err
+		}
+		if abs, ok := ygo.CreateAbsolutePositionFromRelativePosition(r.doc, pos); ok {
+			out = append(out, abs.Index)
+		} else {
+			out = append(out, nil)
+		}
+	}
+	return out, nil
+}
+
 func (r *ygoReplica) StateVector() ([]byte, error) { return ygo.EncodeStateVector(r.doc), nil }
 
 func (r *ygoReplica) Diff(sv []byte, version int) (diff []byte, err error) {

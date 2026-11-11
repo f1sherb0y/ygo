@@ -145,6 +145,7 @@ fn dump_out<T: ReadTxn>(value: &Out, txn: &T) -> Value {
         Out::YXmlElement(el) => dump_xml(&XmlOut::Element(el.clone()), txn),
         Out::YXmlText(text) => dump_xml(&XmlOut::Text(text.clone()), txn),
         Out::YXmlFragment(fragment) => dump_xml(&XmlOut::Fragment(fragment.clone()), txn),
+        Out::YDoc(doc) => json!({ "$doc": doc.guid().to_string() }),
         _ => Value::Null,
     }
 }
@@ -155,6 +156,8 @@ struct Replica {
     arr: ArrayRef,
     map: MapRef,
     xml: XmlFragmentRef,
+    // The relative positions the replica made, as hex.
+    positions: std::cell::RefCell<Vec<String>>,
 }
 
 fn new_replica(client_id: u64, gc: bool) -> Replica {
@@ -168,6 +171,7 @@ fn new_replica(client_id: u64, gc: bool) -> Replica {
         map: doc.get_or_insert_map("map"),
         xml: doc.get_or_insert_xml_fragment("xml"),
         doc,
+        positions: Default::default(),
     }
 }
 
@@ -178,6 +182,7 @@ fn dump(replica: &Replica) -> Value {
         "arr": replica.arr.iter(&txn).map(|v| dump_out(&v, &txn)).collect::<Vec<_>>(),
         "map": dump_map(&replica.map, &txn),
         "xml": replica.xml.children(&txn).map(|c| dump_xml(&c, &txn)).collect::<Vec<_>>(),
+        "subdocs": txn.subdoc_guids().map(|guid| guid.to_string()).collect::<Vec<_>>(),
     })
 }
 
@@ -252,6 +257,9 @@ fn apply(replica: &Replica, txn: &mut TransactionMut, step: &Value) {
         "mdel" => {
             map.remove(txn, key);
         }
+        "msub" => {
+            map.insert(txn, key, Doc::new());
+        }
         "mtext" => {
             map.insert(txn, key, TextPrelim::new(s));
         }
@@ -272,10 +280,149 @@ fn apply(replica: &Replica, txn: &mut TransactionMut, step: &Value) {
                 xml.remove_range(txn, p, k.min(length - p))
             }
         }
-        // Undo, relative positions and snapshots are compared between ygo
-        // and yjs only; a yrs replica lets these steps pass.
-        "undo" | "redo" | "rpos" | "snap" => {}
+        "rpos" => positions::make(replica, txn, n, k),
+        // Undo and snapshots are compared between ygo and yjs only; a yrs
+        // replica lets these steps pass.
+        "undo" | "redo" | "snap" => {}
         other => panic!("unknown op {other}"),
+    }
+}
+
+// Relative positions (sticky indexes) in the root text.
+#[cfg(not(feature = "yrs-025"))]
+mod positions {
+    use serde_json::{json, Value};
+    use yrs::updates::decoder::Decode;
+    use yrs::updates::encoder::Encode;
+    use yrs::{Assoc, GetString, IndexedSequence, StickyIndex, Transact, TransactionMut};
+
+    pub fn make(replica: &super::Replica, txn: &mut TransactionMut, n: u64, k: u32) {
+        let length = replica.text.get_string(txn).encode_utf16().count() as u64;
+        let index = (n * (length + 1) >> 16) as u32;
+        let assoc = if k != 0 { Assoc::Before } else { Assoc::After };
+        if let Some(position) = replica.text.sticky_index(txn, index, assoc) {
+            replica.positions.borrow_mut().push(super::hex(&position.encode_v1()));
+        }
+    }
+
+    pub fn made(replica: &super::Replica) -> Vec<Value> {
+        replica.positions.borrow().iter().map(|bytes| json!({ "bytes": bytes })).collect()
+    }
+
+    pub fn resolve(replica: &super::Replica, request: &Value) -> Value {
+        let txn = replica.doc.transact();
+        let indexes: Vec<Value> = request["positions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|bytes| match StickyIndex::decode_v1(&super::unhex(bytes.as_str().unwrap())) {
+                Ok(position) => position.get_offset(&txn).map(|offset| json!(offset.index)).unwrap_or(Value::Null),
+                Err(_) => json!("undecodable"),
+            })
+            .collect();
+        json!({ "dump": { "indexes": indexes } })
+    }
+}
+
+#[cfg(feature = "yrs-025")]
+mod positions {
+    use serde_json::{json, Value};
+    pub fn make(_: &super::Replica, _: &mut yrs::TransactionMut, _: u64, _: u32) {}
+    pub fn made(_: &super::Replica) -> Vec<Value> {
+        Vec::new()
+    }
+    pub fn resolve(_: &super::Replica, _: &Value) -> Value {
+        json!({ "error": "positions are not driven on yrs 0.25" })
+    }
+}
+
+// Awareness instances, for the presence scripts.
+#[cfg(not(feature = "yrs-025"))]
+mod presence {
+    use serde_json::{json, Value};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use yrs::sync::awareness::AwarenessUpdate;
+    use yrs::sync::Awareness;
+    use yrs::updates::decoder::Decode;
+    use yrs::updates::encoder::Encode;
+
+    thread_local! {
+        static INSTANCES: RefCell<HashMap<u64, Awareness>> = RefCell::new(HashMap::new());
+        // Every client an instance has heard of, the removed ones included:
+        // what "everything it knows" is encoded from.
+        static KNOWN: RefCell<HashMap<u64, Vec<yrs::block::ClientID>>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn handle(id: u64, request: &Value) -> Value {
+        INSTANCES.with(|instances| {
+            let mut instances = instances.borrow_mut();
+            match request["cmd"].as_str().unwrap() {
+                "anew" => {
+                    let number = request["client"].as_u64().unwrap();
+                    let client = super::version::client(number);
+                    let mut awareness = Awareness::new(yrs::Doc::with_client_id(number));
+                    // The empty state every y-protocols instance starts with.
+                    awareness.set_local_state_raw("{}");
+                    instances.insert(id, awareness);
+                    KNOWN.with(|known| known.borrow_mut().insert(id, vec![client]));
+                    json!({})
+                }
+                "aset" => {
+                    let awareness = instances.get_mut(&id).unwrap();
+                    if request["state"].is_null() {
+                        awareness.clean_local_state();
+                    } else {
+                        awareness.set_local_state_raw(request["state"].to_string());
+                    }
+                    json!({})
+                }
+                "aenc" => {
+                    let clients = KNOWN.with(|known| known.borrow()[&id].clone());
+                    match instances[&id].update_with_clients(clients) {
+                        Ok(update) => json!({ "hex": super::hex(&update.encode_v1()) }),
+                        Err(error) => json!({ "error": format!("encode: {error}") }),
+                    }
+                }
+                "aapply" => {
+                    let bytes = super::unhex(request["update"].as_str().unwrap());
+                    match AwarenessUpdate::decode_v1(&bytes) {
+                        Err(error) => json!({ "error": format!("decode: {error}") }),
+                        Ok(update) => {
+                            KNOWN.with(|known| {
+                                let mut known = known.borrow_mut();
+                                let list = known.get_mut(&id).unwrap();
+                                for client in update.clients.keys() {
+                                    if !list.contains(client) {
+                                        list.push(*client);
+                                    }
+                                }
+                            });
+                            match instances.get_mut(&id).unwrap().apply_update(update) {
+                                Err(error) => json!({ "error": format!("apply: {error}") }),
+                                Ok(()) => json!({}),
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let mut states = serde_json::Map::new();
+                    for (client, state) in instances[&id].iter() {
+                        if let Some(data) = state.data {
+                            states.insert(client.to_string(), serde_json::from_str(&data).unwrap());
+                        }
+                    }
+                    json!({ "dump": states })
+                }
+            }
+        })
+    }
+}
+
+#[cfg(feature = "yrs-025")]
+mod presence {
+    pub fn handle(_: u64, _: &serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "error": "presence is not driven on yrs 0.25" })
     }
 }
 
@@ -316,7 +463,13 @@ fn handle(replicas: &mut HashMap<u64, Replica>, request: &Value) -> Value {
                 },
             }
         }
-        "dump" => json!({ "dump": dump(&replicas[&id]) }),
+        "dump" => {
+            let mut out = dump(&replicas[&id]);
+            out["$local"] = json!({ "positions": positions::made(&replicas[&id]) });
+            json!({ "dump": out })
+        }
+        "resolve" => positions::resolve(&replicas[&id], request),
+        "anew" | "aset" | "aenc" | "aapply" | "astates" => presence::handle(id, request),
         "merge" => {
             let updates: Vec<Vec<u8>> =
                 request["updates"].as_array().unwrap().iter().map(|u| unhex(u.as_str().unwrap())).collect();

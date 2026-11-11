@@ -44,7 +44,19 @@ asked for three more: a moment to greet a connection (`OnSessionOpen`),
 whose an update is (`OnChangeFrom`), and taking writing away from a
 connection that is open (`SetReadOnly`).
 
-### 5. Speed
+### 5. Undo did not restore a subdocument (fixed)
+
+Undoing a write that replaced a subdocument under a map key, or the
+deletion of one, left the key without it, where yjs puts back a reference
+with the same GUID and options. The README listed it as a gap; the
+`editor` profile found it in a three-step script. Undo restores the
+reference now.
+
+Still as it was: `Map.Get` and `Range` give nil for a key that holds a
+subdocument, and `Map.GetDoc` reads it. yjs's `map.get` returns the
+document.
+
+### 5b. Speed
 
 Not a difference in results, but what stood between ygo and a server that
 commits every edit on its own. See BENCHMARKS.md: on the B4 editing trace a
@@ -117,6 +129,18 @@ a root once the application has asked for it with `NewText`; a server that
 applies updates to a document it never reads does no cleanup. The
 conformance replicas create their roots first, as an application does.
 
+### 11. After an undo, a relative position is somewhere else for the replica that undid
+
+A relative position names an item. When the item is deleted and the
+deletion undone, the replica that undid it knows that a new item stands
+for the old one and resolves the position to it; that link is not part of
+any update, so every other replica resolves the same position to where
+the deleted item was. In the shrunk script the two answers are index 12
+and index 9 of the same text. yjs does this, and ygo does exactly the
+same. A cursor kept as a relative position can therefore jump for other
+users after someone undoes. It is why the cross-replica check of
+positions leaves out scripts with an undo.
+
 ## For a backend on yrs 0.25
 
 Either of findings 6 and 7 moves a replica away from the others for good,
@@ -127,9 +151,11 @@ without an error. Upgrading yrs fixes both.
 On Windows 11, amd64, Go 1.27.3, Node 24.12:
 
 - `TestDifferential` and `TestDelivery`: seeds 0 to 299 of each of the
-  sixteen profiles, every arrangement in README.md, with yjs 13.6.33 and
+  seventeen profiles, every arrangement in README.md, with yjs 13.6.33 and
   yrs 0.28.1; seeds 1000 to 1399 of the ten profiles without undo,
-  positions and snapshots. The six profiles with them found no difference
+  positions and snapshots.
+- `TestAwareness`: seeds 0 to 299 with ygo, y-protocols 1.0.7 and yrs
+  0.28.1, three to five clients, alone and mixed. The six profiles with them found no difference
   between ygo and yjs; that they can was checked by breaking each of the
   three in the ygo replica.
 - `TestFindings`: the three reproducers.

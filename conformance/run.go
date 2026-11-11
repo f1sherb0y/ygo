@@ -2,9 +2,11 @@ package conformance
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 )
 
 // Outcome is the content every replica ended with, once all of them agree.
@@ -16,6 +18,72 @@ type Outcome struct {
 	// the positions it made, resolved now, and the snapshots it took,
 	// restored now. Implementations that do not report it leave nil.
 	Local []any
+}
+
+// relabel replaces the GUIDs of subdocuments, which every run makes up
+// anew, by labels in the order a walk of the content meets them, so that
+// two runs of one script compare equal when they hold subdocuments in the
+// same places. Replicas of one run are compared before this, GUIDs and
+// all.
+func relabel(content any) any {
+	labels := map[string]string{}
+	label := func(guid string) string {
+		if _, ok := labels[guid]; !ok {
+			labels[guid] = fmt.Sprintf("subdoc-%d", len(labels)+1)
+		}
+		return labels[guid]
+	}
+	var walk func(v any) any
+	walk = func(v any) any {
+		switch v := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			out := make(map[string]any, len(v))
+			for _, k := range keys {
+				if guid, ok := v[k].(string); ok && k == "$doc" {
+					out[k] = label(guid)
+				} else if k != "subdocs" {
+					out[k] = walk(v[k])
+				}
+			}
+			// The set of subdocuments last: the ones still referenced have
+			// their labels by now.
+			if set, ok := v["subdocs"].([]any); ok {
+				named := make([]string, 0, len(set))
+				for _, guid := range set {
+					if guid, ok := guid.(string); ok {
+						named = append(named, label(guid))
+					}
+				}
+				sort.Strings(named)
+				list := make([]any, len(named))
+				for i, name := range named {
+					list[i] = name
+				}
+				out["subdocs"] = list
+			}
+			return out
+		case []any:
+			out := make([]any, len(v))
+			for i := range v {
+				out[i] = walk(v[i])
+			}
+			return out
+		}
+		return v
+	}
+	return walk(content)
+}
+
+// sortSubdocs puts the set of subdocuments of a dump in order.
+func sortSubdocs(d map[string]any) {
+	if set, ok := d["subdocs"].([]any); ok {
+		sort.Slice(set, func(i, j int) bool { return fmt.Sprint(set[i]) < fmt.Sprint(set[j]) })
+	}
 }
 
 // localKey is the key of a dump under which a replica reports what it
@@ -145,6 +213,7 @@ func Run(script Script, impls ...Implementation) (Outcome, error) {
 		}
 		local := d[localKey]
 		delete(d, localKey)
+		sortSubdocs(d)
 		outcome.Local = append(outcome.Local, normal(local))
 		content, clocks := normal(d), decodeStateVector(sv)
 		if i == 0 {
@@ -159,6 +228,56 @@ func Run(script Script, impls ...Implementation) (Outcome, error) {
 		if !reflect.DeepEqual(clocks, outcome.StateVector) {
 			return Outcome{}, fmt.Errorf("%s and %s have different state vectors after syncing: %v, %v", name(0), name(i), outcome.StateVector, clocks)
 		}
+	}
+	// Every position any replica made, resolved by every replica: they hold
+	// the same document now, so each position is at one index for all of
+	// them, whoever made it and whoever reads it.
+	var positions [][]byte
+	for _, local := range outcome.Local {
+		mine, _ := local.(map[string]any)
+		made, _ := mine["positions"].([]any)
+		for _, entry := range made {
+			entry, _ := entry.(map[string]any)
+			if text, ok := entry["bytes"].(string); ok {
+				raw, err := hex.DecodeString(text)
+				if err != nil {
+					return Outcome{}, err
+				}
+				positions = append(positions, raw)
+			}
+		}
+	}
+	// Not after an undo: the replica that undid a deletion follows the
+	// deleted item to its restored copy, which only it knows of, and the
+	// others resolve to where the deleted item was. yjs does the same
+	// (FINDINGS.md).
+	undid := false
+	for _, step := range script.Steps {
+		undid = undid || step.Op == "undo" || step.Op == "redo"
+	}
+	if len(positions) > 0 && !undid {
+		var first []any
+		firstName := ""
+		for i, r := range replicas {
+			resolver, ok := r.(Resolver)
+			if !ok {
+				continue
+			}
+			got, err := resolver.Resolve(positions)
+			if err != nil {
+				return Outcome{}, fmt.Errorf("%s resolving positions: %w", name(i), err)
+			}
+			got, _ = normal(got).([]any)
+			if firstName == "" {
+				first, firstName = got, name(i)
+			} else if !reflect.DeepEqual(got, first) {
+				return Outcome{}, fmt.Errorf("%s and %s resolve the same relative positions to different indexes: %v, %v", firstName, name(i), first, got)
+			}
+		}
+	}
+	outcome.Content = relabel(outcome.Content)
+	for i := range outcome.Local {
+		outcome.Local[i] = relabel(outcome.Local[i])
 	}
 	return outcome, nil
 }

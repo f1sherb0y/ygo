@@ -81,7 +81,8 @@ The profiles:
 | collections-undo | 3 | 60 | arrays, maps, nested types and XML, with undo and redo |
 | text-positions | 3 | 60 | text with relative positions made on the way |
 | snapshots | 3 | 60 | text, arrays and maps with snapshots taken on the way |
-| editor | 4 | 120 | everything, with undo, positions and snapshots |
+| subdocuments | 3 | 60 | arrays and maps, with subdocuments set under map keys |
+| editor | 4 | 120 | everything, with undo, positions, snapshots and subdocuments |
 | everything | 4 | 120 | all of the above in one document |
 | everything-long | 6 | 400 | the same, longer |
 
@@ -92,8 +93,27 @@ any edit. A position is made at an index of the replica's text; at the end
 the replica reports its bytes and the index it resolves to now. A snapshot
 is taken at a step and restored at the end, through its encoding (scripts
 without garbage collection only). These are compared between ygo and yjs,
-replica by replica, alone and mixed. A yrs replica lets the steps pass, so
-its arrangements still check convergence around them.
+replica by replica, alone and mixed. A yrs replica makes positions too and
+lets undo and snapshot steps pass, so its arrangements still check
+convergence around them.
+
+Positions are also checked across replicas and implementations: at the
+end, every position any replica made is given, as bytes, to every replica,
+yrs included, and all must resolve it to the same index of the document
+they now share. Scripts with an undo are left out of this one check
+(FINDINGS.md, 11).
+
+A subdocument is a reference under a key of the map. Its GUID is made up
+by the replica that sets it, so replicas of one run are compared GUIDs and
+all, and two runs after the GUIDs were replaced by the order in which a
+walk of the content meets them. Each replica's set of known subdocuments
+is part of what is compared.
+
+**`TestAwareness`** is the same idea for presence: scripts of clients
+setting, changing and removing their state and telling one another
+everything they know, in any order, through ygo, y-protocols and yrs,
+alone and with clients of each in one room. Everyone must end with the
+same states, and the same ones whoever held which client.
 
 **`TestDelivery`** takes the updates one replica produced and gives them to
 a fresh replica of each implementation in ways a network does: in order,
@@ -111,12 +131,14 @@ and `TestScript -script` replays it.
 
 ## What is not covered
 
-- Undo, relative positions and snapshots are compared with yjs, not with
-  yrs. Positions are made in the root text only, not in arrays or nested
-  types.
-- Subdocuments and awareness are not in the scripts. They have fixtures
-  against yjs in the root package, and awareness goes between real
-  providers and the server in `testdata/e2e`.
+- Undo and snapshots are compared with yjs, not with yrs. Positions are
+  made in the root text only, not in arrays or nested types.
+- Subdocuments are references only: nothing is written into one, and none
+  is set in an array. What a subdocument holds syncs as a document of its
+  own, which the scripts already cover.
+- Awareness scripts do not let time pass: the 30-second timeout after
+  which a silent client is dropped is tested in the awareness package, not
+  here.
 - XML is compared between ygo and yjs only up to what the script edits
   (elements, attributes, text); `XmlHook` is not generated.
 - Moved ranges (yrs `move`) are not generated: yjs 13 does not have them.

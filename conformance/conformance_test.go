@@ -67,7 +67,7 @@ func haveNode() bool {
 // editor is everything with what an editor adds to it.
 var editor = func() Profile {
 	p := Everything
-	p.Undo, p.Positions, p.Snapshots = true, true, true
+	p.Undo, p.Positions, p.Snapshots, p.Subdocs = true, true, true, true
 	return p
 }()
 
@@ -92,6 +92,7 @@ var profiles = []profileCase{
 	{"collections-undo", Profile{Array: true, Map: true, Nested: true, XML: true, Undo: true}, 3, 60},
 	{"text-positions", Profile{Text: true, Astral: true, Positions: true}, 3, 60},
 	{"snapshots", Profile{Text: true, Format: true, Array: true, Map: true, Snapshots: true}, 3, 60},
+	{"subdocuments", Profile{Map: true, Array: true, Subdocs: true}, 3, 60},
 	{"editor", editor, 4, 120},
 	{"everything", Everything, 4, 120},
 	{"everything-long", Everything, 6, 400},
@@ -130,6 +131,13 @@ func check(script Script, yjs, yrs *Driver) string {
 		if !reflect.DeepEqual(mine, theirs) {
 			a, _ := json.Marshal(mine.Content)
 			b, _ := json.Marshal(theirs.Content)
+			if reflect.DeepEqual(mine.Content, theirs.Content) && reflect.DeepEqual(mine.StateVector, theirs.StateVector) {
+				// The documents agree; what the replicas hold for
+				// themselves does not.
+				a, _ = json.Marshal(mine.Local)
+				b, _ = json.Marshal(theirs.Local)
+				return fmt.Sprintf("ygo and yjs replicas resolve their positions or restore their snapshots differently:\n    %s\n    %s", a, b)
+			}
 			return fmt.Sprintf("ygo and yjs end with different content:\n    %s\n    %s", a, b)
 		}
 		// Replicas of both, exchanging updates, must agree with that too.

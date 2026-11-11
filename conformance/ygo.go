@@ -89,11 +89,27 @@ func dump(d *ygo.Doc) map[string]any {
 	ygo.NewArray(d, "arr").Range(func(_ uint64, value any) bool { arr = append(arr, dumpValue(value)); return true })
 	xml := []any{}
 	ygo.NewXmlFragment(d, "xml").Range(func(_ uint64, child any) bool { xml = append(xml, dumpValue(child)); return true })
+	// Map.Get and Range give nil for a subdocument (FINDINGS.md); GetDoc
+	// is how ygo reads one.
+	m := ygo.NewMap(d, "map")
+	root := dumpValue(m).(map[string]any)["$map"].(map[string]any)
+	for key, value := range root {
+		if value == nil {
+			if sub, ok := m.GetDoc(d, key); ok {
+				root[key] = map[string]any{"$doc": sub.GUID()}
+			}
+		}
+	}
+	subdocs := []any{}
+	for _, guid := range d.Subdocs() {
+		subdocs = append(subdocs, guid)
+	}
 	return map[string]any{
-		"text": dumpText(ygo.NewText(d, "text")),
-		"arr":  arr,
-		"map":  dumpValue(ygo.NewMap(d, "map")).(map[string]any)["$map"],
-		"xml":  xml,
+		"text":    dumpText(ygo.NewText(d, "text")),
+		"arr":     arr,
+		"map":     root,
+		"xml":     xml,
+		"subdocs": subdocs,
 	}
 }
 
@@ -158,6 +174,8 @@ func applyStep(d *ygo.Doc, step Step) error {
 		m.Set(txn, step.Key, jsValue(step.Val))
 	case "mdel":
 		m.Delete(txn, step.Key)
+	case "msub":
+		m.SetDoc(txn, step.Key)
 	case "mtext":
 		return m.SetText(txn, step.Key).Insert(txn, 0, step.S)
 	case "amap":

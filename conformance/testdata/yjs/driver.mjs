@@ -1,6 +1,7 @@
 // Holds yjs documents for the conformance tests. One JSON command per line on
 // stdin, one JSON answer per line on stdout (see ../../driver.go).
 import * as Y from 'yjs'
+import * as presence from 'y-protocols/awareness'
 import { createInterface } from 'node:readline'
 
 const hex = (bytes) => Buffer.from(bytes).toString('hex')
@@ -21,6 +22,7 @@ function newDoc(clientID, gc) {
 }
 
 function dumpValue(value) {
+  if (value instanceof Y.Doc) return { $doc: value.guid }
   if (value instanceof Y.Text) return { $text: dumpText(value) }
   if (value instanceof Y.Map) {
     const out = {}
@@ -46,6 +48,7 @@ function dump(doc) {
     arr: doc.getArray('arr').toArray().map(dumpValue),
     map: dumpValue(doc.getMap('map')).$map,
     xml: doc.getXmlFragment('xml').toArray().map(dumpValue),
+    subdocs: [...doc.getSubdocGuids()],
   }
 }
 
@@ -71,6 +74,7 @@ function apply(doc, step) {
     case 'adel': if (arr.length) { const p = within(step.n, arr.length); arr.delete(p, Math.min(step.k, arr.length - p)) } break
     case 'mset': map.set(step.key, step.val); break
     case 'mdel': map.delete(step.key); break
+    case 'msub': map.set(step.key, new Y.Doc()); break
     case 'mtext': map.set(step.key, new Y.Text(step.s)); break
     case 'amap': { const m = new Y.Map(); m.set(step.key, step.val); arr.insert(at(step.n, arr.length), [m]); break }
     case 'xel': {
@@ -146,6 +150,25 @@ function handle(request) {
       if (request.v === 2) Y.applyUpdateV2(doc, unhex(request.update), 'remote')
       else Y.applyUpdate(doc, unhex(request.update), 'remote')
       return {}
+    case 'anew': {
+      const owner = new Y.Doc()
+      owner.clientID = request.client
+      const instance = new presence.Awareness(owner)
+      // Its timer would keep this process alive after stdin ends.
+      clearInterval(instance._checkInterval)
+      docs.set(request.id, instance)
+      return {}
+    }
+    case 'aset': doc.setLocalState(request.state ?? null); return {}
+    case 'aenc': return { hex: hex(presence.encodeAwarenessUpdate(doc, [...doc.meta.keys()])) }
+    case 'aapply': presence.applyAwarenessUpdate(doc, unhex(request.update), 'remote'); return {}
+    case 'astates': return { dump: Object.fromEntries(doc.getStates()) }
+    case 'resolve': return {
+      dump: {
+        indexes: request.positions.map((bytes) =>
+          Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(unhex(bytes)), doc)?.index ?? null),
+      },
+    }
     case 'dump': return { dump: { ...dump(doc), $local: local(doc) } }
     case 'merge': {
       const updates = request.updates.map(unhex)
