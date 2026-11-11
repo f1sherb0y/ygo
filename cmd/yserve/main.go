@@ -61,6 +61,7 @@ func main() {
 	versionInterval := flag.Duration("version-interval", 0, "capture a version of each changed document at this interval (0 = off; requires -store)")
 	keepVersions := flag.Int("keep-versions", 10, "keep at most N versions per document when auto-versioning (0 = keep all)")
 	readLimit := flag.Int64("read-limit", 0, "max WebSocket message size in bytes per client frame (0 = 4 MiB default; -1 = unlimited)")
+	hocuspocus := flag.Bool("hocuspocus", false, "serve @hocuspocus/provider clients instead of y-websocket clients; the document is the name the provider gives, not the URL path")
 	pathPrefix := flag.String("path-prefix", "/", "URL path the documents live under; the rest of the path is the document name")
 	awarenessTimeout := flag.Duration("awareness-timeout", 0, "evict a presence entry after it is silent this long (0 = 30s default)")
 	maxAwarenessClients := flag.Int("max-awareness-clients", 0, "cap distinct presence clients per room (0 = 4096 default; -1 = unlimited)")
@@ -97,6 +98,7 @@ func main() {
 		VersionInterval:     *versionInterval,
 		KeepVersions:        *keepVersions,
 		ReadLimit:           *readLimit,
+		Hocuspocus:          *hocuspocus,
 		AwarenessTimeout:    *awarenessTimeout,
 		MaxAwarenessClients: *maxAwarenessClients,
 		MaxConnsPerDoc:      *maxConnsPerDoc,
