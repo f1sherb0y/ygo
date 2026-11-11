@@ -12,7 +12,7 @@
 
 Pure-Go port of [Yjs](https://github.com/yjs/yjs), the CRDT framework for collaborative applications, listed on the [ports page](https://docs.yjs.dev/ecosystem/ports-to-other-languages) of the Yjs documentation.
 
-Ygo speaks the **Yjs V1 and V2 wire formats** byte for byte, apart from object key order, whole-number floats set from Go and a format attribute set to undefined (see [Strings and values](#strings-and-values)). The encoding is verified in both directions through **307 cross-language fixture scenarios** generated from `yjs@13.6.33`. The bundled WebSocket server speaks the `y-websocket` protocol: JavaScript clients using `y-websocket` connect to it directly, and the Go client connects to the reference `y-websocket` server. **Hocuspocus clients and servers do not interoperate with ygo today** (see [known gaps](#known-gaps)). No CGO; `gomobile bind` produces an Android AAR (built in CI) and an iOS xcframework (built by hand).
+Ygo speaks the **Yjs V1 and V2 wire formats** byte for byte, apart from object key order, whole-number floats set from Go and a format attribute set to undefined (see [Strings and values](#strings-and-values)). The encoding is verified in both directions through **307 cross-language fixture scenarios** generated from `yjs@13.6.33`. The bundled WebSocket server speaks the `y-websocket` protocol: JavaScript clients using `y-websocket` connect to it directly, and the Go client connects to the reference `y-websocket` server. With `Options.Hocuspocus` (`yserve -hocuspocus`) it serves `@hocuspocus/provider` instead, and the Go client connects to Hocuspocus servers. No CGO; `gomobile bind` produces an Android AAR (built in CI) and an iOS xcframework (built by hand).
 
 ## Highlights
 
@@ -189,10 +189,10 @@ defer unsub()
 
 ### Known gaps
 
-- **Hocuspocus providers on the ygo server.** `@hocuspocus/provider` cannot sync with yserve or the `server` package (checked with provider 2.15, 3.4 and 4.8): Hocuspocus starts every frame with the document name, which the server does not parse. The other direction works: the Go client speaks Hocuspocus with `client.Options.Hocuspocus` and is checked in CI against `@hocuspocus/server` 4.8, 3.4 and 2.15.
+- **Hocuspocus is a mode of the server, not an addition to it.** A handler with `Options.Hocuspocus` serves `@hocuspocus/provider` (2.15, 3.4 and 4.8 are checked in CI) and no `y-websocket` clients; one connection serves one document, so providers that share a `HocuspocusProviderWebsocket` between documents are refused. Hocuspocus's server extensions are JavaScript and do not exist here.
 - **Message size.** The server reads client messages up to 4 MiB by default. A larger one (the first sync of a larger document) closes the connection with 1009, and the client reconnects and resends it in a loop. Raise `ReadLimit` (`yserve -read-limit`) above your largest document.
 - **Any values.** An object with more than one key comes back with its keys sorted, and a format attribute set to undefined comes back as null; see [Strings and values](#strings-and-values).
-- **Speed.** Applying edits is about 20× slower than yjs on the same machine. See [Benchmarks](#benchmarks).
+- **Speed.** Applying edits is in the range of yjs on a real editing trace; many clients inserting at the same position (B2.1) is still slow. See [Benchmarks](#benchmarks).
 
 ### Status by layer
 
@@ -211,9 +211,9 @@ defer unsub()
 | `internal/types/Xml*` (XmlFragment, XmlElement, XmlText) | done; ProseMirror/Tiptap/BlockNote unblocked. XmlHook (legacy) deferred. |
 | Persistence (`Store` interface + `modernc.org/sqlite` reference impl) | done; append-only update log, Flush compaction, LoadDoc / GetStateVector / GetDiff helpers; pure-Go (no CGO). The sqlite backend runs in WAL mode with a busy timeout for concurrency-safe writes |
 | Update-level utilities (`MergeUpdates` / `MergeUpdatesV2` / `DiffUpdate` / `EncodeStateVectorFromUpdate`) | done; yjs-parity helpers to merge, diff, and compute a state vector from update bytes, for server-side compaction and diffing. `EncodeStateVectorFromUpdate` reads the bytes directly; the merge and diff helpers reconstruct a document internally. Merging preserves blocks whose causal ancestor is absent from the set, writing `Skip` runs for the holes exactly as yjs does, so an incomplete set is coalesced rather than silently truncated |
-| y-sync protocol (`internal/sync`) | done for `y-websocket` clients (Sync + Awareness + QueryAwareness), and the Hocuspocus envelope (routing key, Auth with Hocuspocus's sub-types and scope, Stateless, Close, SyncStatus) for the Go client. The server does not parse the routing key, so stock Hocuspocus providers cannot use it; per-document Auth permission scoping deferred ([tech-debt](docs/tech-debt.md)) |
+| y-sync protocol (`internal/sync`) | done for `y-websocket` clients (Sync + Awareness + QueryAwareness), and the Hocuspocus envelope (routing key, Auth with Hocuspocus's sub-types and scope, Stateless, Close, SyncStatus) for the Go client and, with `server.Options.Hocuspocus`, for stock Hocuspocus providers; per-document Auth permission scoping deferred ([tech-debt](docs/tech-debt.md)) |
 | Awareness (`internal/awareness`) | done; LWW presence map, JSON wire payload per y-protocols, self-eviction defense, SweepOutdated, decode caps + per-room client cap + tombstone GC (DoS hardening) |
-| `server/` (WebSocket sync server) | done; `http.Handler` mount-anywhere shape, per-doc broadcaster, persists every applied update to optional `persist.Store`. Connection lifecycle hooks (`OnConnect` / `OnDisconnect` / `OnChange` / `OnLoadDocument` / `OnAuthenticate` / `OnStateless`; the last two fire only for Hocuspocus message types, which stock clients do not send on these frames, so authenticate at the upgrade with `OnConnect`), read-only viewers (`ReadOnly`), resource caps (`MaxConnsPerDoc` / `MaxDocs` / `MaxAwarenessClients`), a send queue and writer per connection so a slow client never delays its room (one that falls behind is closed and resyncs: `MaxSendQueue` / `MaxSendQueueBytes` / `WriteTimeout`), a `Stats` load snapshot, and awareness disconnect tombstones + periodic presence sweep (`AwarenessTimeout`) |
+| `server/` (WebSocket sync server) | done; `http.Handler` mount-anywhere shape, per-doc broadcaster, persists every applied update to optional `persist.Store`. Connection lifecycle hooks (`OnConnect` / `OnDisconnect` / `OnChange` / `OnLoadDocument` / `OnAuthenticate` / `OnStateless`; the last two fire only for Hocuspocus message types: with `Options.Hocuspocus` every provider goes through `OnAuthenticate`; y-websocket clients do not send them, so authenticate those at the upgrade with `OnConnect`), read-only viewers (`ReadOnly`), resource caps (`MaxConnsPerDoc` / `MaxDocs` / `MaxAwarenessClients`), a send queue and writer per connection so a slow client never delays its room (one that falls behind is closed and resyncs: `MaxSendQueue` / `MaxSendQueueBytes` / `WriteTimeout`), a `Stats` load snapshot, and awareness disconnect tombstones + periodic presence sweep (`AwarenessTimeout`) |
 | `server/backplane` (multi-instance clustering) | done; pluggable pub/sub `Backplane` so instances behind a load balancer converge on one document, carrying both document updates and presence (relayed presence held to its own origin-partitioned share of the per-room cap, so a flood on one instance cannot starve local clients on another). In-process `Memory` hub in the core; the opt-in [NATS adapter](server/backplane/nats) is a separate module (so NATS stays out of the core's dependencies) offering core-NATS at-most-once or a JetStream mode that resumes across a broker reconnect or restart. Requires a shared `Store`, and all instances in a cluster must run the same version. Library only: `yserve` has no backplane option |
 | [`integration/matrix`](integration/matrix) (federated transport) | done; opt-in separate module carrying updates as `dev.ygo.update` room events over a Matrix room, no ygo server involved. Backward `/messages` pagination from the `/sync` `prev_batch` token (an empty page is not the end of history), per-call event-ID dedup, `ygo.ValidateUpdate` on both publish and read, per-event decoding so one hostile event costs one event rather than a whole page, an event-size ceiling, refusal of end-to-end-encrypted rooms, and a `/messages` fallback when `/sync` is unusable. Unit suite against a strict in-process double plus a real Dendrite in CI on every push to `main` and every pull request. Deliberately thin: whole blobs, no state-vector diffing, no compaction — see its README for what that costs |
 | [yserve](docs/yserve.md) (server binary for `y-websocket` clients) | done; one binary with SQLite persistence (`-store`) and periodic document versioning (`-version-interval` / `-keep-versions`); `cmd/ygo-server` remains as a deprecated alias |
@@ -267,38 +267,37 @@ Byte equality does not extend to objects with more than one key, whose keys ygo 
 |---|---|---|---|
 | `yjs` (npm) | Node / browser | The reference CRDT implementation | Ygo's wire-format target |
 | `y-websocket` | Node | Reference WebSocket server | [yserve](docs/yserve.md) is a Go-native equivalent |
-| `Hocuspocus` | Node | Production WebSocket server with auth, persistence, extensions | The Go client syncs with it (servers 2.15, 3.4, 4.8; `client.Options.Hocuspocus`); yserve does not serve Hocuspocus providers |
+| `Hocuspocus` | Node | Production WebSocket server with auth, persistence, extensions | The Go client syncs with it (servers 2.15, 3.4, 4.8; `client.Options.Hocuspocus`), and `yserve -hocuspocus` serves its providers (2.15, 3.4, 4.8), without its extensions |
 | `yrs` | Rust | Reference Rust port | Ygo's executable spec for porting decisions |
 | `y-leveldb`, `y-indexeddb` | Node / browser | Persistence backends | Ygo's `persist/sqlite` is a Go-native equivalent |
 | **Ygo** | **Go** | **CRDT engine + WS server + persistence in one monorepo, pure-Go for native mobile** | **This project** |
 
-If you run a `y-websocket` deployment and want to move the server side to Go (no Node runtime, one binary), ygo is an option; read the [known gaps](#known-gaps) first. A Hocuspocus deployment cannot move its server to ygo without changing its clients; Go programs can join it as clients. If you're starting fresh and your team is comfortable with Node, Hocuspocus is the mature choice.
+If you run a `y-websocket` deployment and want to move the server side to Go (no Node runtime, one binary), ygo is an option; read the [known gaps](#known-gaps) first. A Hocuspocus deployment can keep its providers and point them at `yserve -hocuspocus`, if it can do without the JavaScript extensions of Hocuspocus and gives every document its own connection; Go programs can also join a Hocuspocus server as clients. If you're starting fresh and your team is comfortable with Node, Hocuspocus is the mature choice.
 
 ## Benchmarks
 
-See [BENCHMARKS.md](BENCHMARKS.md) for the full table. B4 (259,778-edit real-world LaTeX paper trace) on one Apple M3, measured on 2026-11-08 with ygo v1.31.0 on Go 1.26.3 and yjs 13.6.33 on Node 26.6, all edits in one transaction with client ID 1:
+See [BENCHMARKS.md](BENCHMARKS.md) for the full table. B4 (259,778-edit real-world LaTeX paper trace) on one AMD Ryzen AI 9 HX 370 under Windows 11, measured on 2026-11-11 with Go 1.27.3 and yjs 13.6.33 on Node 24.12, client ID 1:
 
 | Metric | Ygo | yjs |
 |---|---|---|
-| Apply all edits | 20.3-21.4 s | 1.0-1.3 s |
+| Apply all edits, one transaction | 0.43 s | 0.75-1.1 s |
+| Apply all edits, a transaction per edit | 0.52 s | 1.3 s |
 | Encoded doc size, V1 | 223 KB | 223 KB |
 | Encoded doc size, V2 | 160 KB | 160 KB |
-| Encode V1 / V2 | 0.8 ms / 7.5 ms | 2.4 ms / 1.7 ms |
-| Parse V1 / V2 | 4.6 ms / 4.8 ms | 5.6 ms / 4.6 ms |
 
 **How to read this:**
 
-- **Applying edits is where ygo is behind:** about 20× slower than yjs on the same machine. A transaction per edit with a random client ID and an update handler, which is closer to real use, takes 23.4 s against 1.0 s.
+- **Applying edits** was about 20× slower than yjs up to v1.36.0 (48 s and 15 s for the two rows above on this machine). Position lookups, block merging and event building were the cost; see BENCHMARKS.md.
 - **Document sizes match yjs** when the client IDs match. With a random client ID, ygo's V1 document is 377 KB and yjs's 311 KB, because ygo's random IDs are 53-bit and yjs 13's are 32-bit. V2 stays at 160 KB for both.
-- **Encode and parse** are in the same range as yjs, except V2 encode, which is about 4× slower.
+- **Encode and parse** were measured on an Apple M3 with v1.31.0 (BENCHMARKS.md): in the same range as yjs, except V2 encode, which is about 4× slower.
 
-No head-to-head run against native yrs exists.
+No head-to-head timing against native yrs exists. Its results are compared in [conformance/](conformance).
 
 ## Roadmap
 
 Shipped since v1.0 (June 2026): a sync server with connection lifecycle hooks, read-only viewers, resource caps and a stats snapshot, horizontal scaling across instances with cross-cluster cursors, an offline-first Go client, WAL-backed SQLite persistence, continuous fuzzing, the yjs update-level utilities, and per-transaction update events with origins (1.22.0). See the [CHANGELOG](CHANGELOG.md), the [releases](https://github.com/Deln0r/ygo/releases), and [examples/](examples).
 
-Open: the [known gaps](#known-gaps) above, including serving Hocuspocus providers, a documentation site, an external security audit, and yjs v14 wire features (attribution / IdMap) once v14 reaches GA.
+Open: the [known gaps](#known-gaps) above, a documentation site, an external security audit, and yjs v14 wire features (attribution / IdMap) once v14 reaches GA.
 
 Per-layer port notes live in [docs/yrs-port-notes/](docs/yrs-port-notes/). Items intentionally deferred or partial are tracked in [docs/tech-debt.md](docs/tech-debt.md). Detailed design decisions in [DESIGN.md](DESIGN.md).
 

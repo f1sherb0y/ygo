@@ -65,6 +65,7 @@ as `-path-prefix`, so that with `-path-prefix /ws/`
 | `-version-interval` | `0` (off) | capture a version of each changed document at this interval; requires `-store` |
 | `-keep-versions` | `10` | keep at most N versions per document (0 = keep all) |
 | `-path-prefix` | `/` | URL path the documents live under; the rest of the path is the document name |
+| `-hocuspocus` | off | serve `@hocuspocus/provider` clients instead of `y-websocket` clients; the document is the name the provider gives, not the URL path (see [Coming from Hocuspocus](#coming-from-hocuspocus)) |
 | `-read-limit` | `0` (4 MiB) | max WebSocket frame the server reads per client; raise for large documents, `-1` = unlimited |
 | `-awareness-timeout` | `0` (30s) | evict a presence entry after it is silent this long |
 | `-max-awareness-clients` | `0` (4096) | cap distinct presence clients per room; `-1` = unlimited |
@@ -98,11 +99,15 @@ _ = store.RestoreVersion(ctx, "my-document", infos[0].ID)   // roll back
 yserve speaks the `y-websocket` protocol: Sync (Step1 / Step2 / Update)
 and Awareness, plus QueryAwareness. It also implements Auth, Stateless,
 BroadcastStateless, Close and SyncStatus with Hocuspocus's message
-numbers, on the same frames and without Hocuspocus's document-name
-prefix, so no stock client sends them. `server.Options.OnAuthenticate`
-and `OnStateless` hook those messages. To authenticate a stock client,
-check the upgrade request in `OnConnect`
+numbers. `server.Options.OnAuthenticate` and `OnStateless` hook those
+messages. A `y-websocket` client sends none of them: to authenticate
+one, check the upgrade request in `OnConnect`
 (see [embedding](#embedding-in-your-own-go-backend)).
+
+With `-hocuspocus` (`server.Options.Hocuspocus`) yserve speaks to
+`@hocuspocus/provider` instead: every frame starts with the document
+name, the token goes through `OnAuthenticate` before anything is sent,
+and each update is answered with a SyncStatus.
 
 The CRDT engine underneath is byte-for-byte wire-compatible with
 `yjs@13.6.33`, apart from a few Any values, verified by the cross-language fixture suite in CI (the count lives in README.md, where a CI check keeps it honest)
@@ -120,10 +125,24 @@ via the `persist` API.
 
 ## Coming from Hocuspocus
 
-Not a drop-in today: a Hocuspocus deployment has to move its clients to
-`y-websocket` first. Server-side extensions differ as well: Hocuspocus
-extensions are JavaScript, and yserve's equivalents are Go callbacks
-plus the `persist.Store` interface for custom storage backends.
+`yserve -hocuspocus` serves stock `@hocuspocus/provider` clients
+(2.15, 3.4 and 4.8 are checked in CI by
+`testdata/e2e/hocuspocus-provider.mjs`): sync, presence, stateless
+messages, tokens, read-only connections and the acknowledgements behind
+the provider's `unsyncedChanges`. What differs from a Hocuspocus server:
+
+- The document is the name the provider is given (`name:`), whatever
+  the URL path. `-path-prefix` still decides which paths are served.
+- One connection serves one document. Providers that share one
+  `HocuspocusProviderWebsocket` between documents are closed with 1008
+  on the second document; give each provider its own connection.
+- In this mode the handler serves no `y-websocket` clients. Embedders
+  who need both mount two `server.Server`s; they do not share documents.
+- yserve itself checks no tokens. Embed the `server` package and set
+  `OnAuthenticate` (and `ReadOnly`) for that: nothing of a document is
+  sent to a connection before its token was accepted.
+- Hocuspocus extensions are JavaScript; the equivalents here are Go
+  callbacks plus the `persist.Store` interface for storage backends.
 
 ## Embedding in your own Go backend
 

@@ -49,6 +49,9 @@ func references(t *testing.T) (yjs, yrs *Driver) {
 			yrs = d
 		}
 	}
+	if os.Getenv("YGO_CONFORMANCE_REQUIRE") != "" && (yjs == nil || yrs == nil) {
+		t.Fatalf("YGO_CONFORMANCE_REQUIRE is set and a reference implementation is missing (yjs: %v, yrs: %v)", yjs != nil, yrs != nil)
+	}
 	if yjs == nil && yrs == nil {
 		t.Log("no reference implementation is installed (see conformance/README.md): checking ygo against itself only")
 	}

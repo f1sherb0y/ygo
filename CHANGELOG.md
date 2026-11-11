@@ -14,6 +14,34 @@ ygo itself: the NATS backplane (`server/backplane/nats`) and the Matrix
 transport (`integration/matrix`). Their releases are listed at the end of this
 file.
 
+## [Unreleased]
+
+**Upgrade impact**:
+
+- **`MergeUpdates(nil)` and `MergeUpdatesV2(nil)` return the empty update**, as yjs does, where they returned nil, which nothing accepts as an update.
+- **A type nobody observes gets no event built.** Observers see what they saw; a deep observer registered by a callback during the same transaction still gets the events it would have got.
+- **Block boundaries after a deletion can differ** from what v1.36.0 left: blocks are merged around the deleted ranges only. Documents and the updates between replicas are unaffected; the 307 fixtures pass unchanged.
+
+### Added
+
+- **The server serves `@hocuspocus/provider`** with `server.Options.Hocuspocus` (`yserve -hocuspocus`), checked with providers 4.8.0, 3.4.4 and 2.15.3:
+  - the document of a connection is the one its first frame names (`DocNameFn` is not called; `OnConnect` and `ReadOnly` get that name), and a connection that names none within `Options.HandshakeTimeout` (10 seconds) is closed;
+  - with `OnAuthenticate` set, nothing is sent to a connection, by the server or from its room, and nothing but Auth is accepted from it until its token was accepted; anything else closes it with 4401;
+  - every update is answered with a SyncStatus (1 applied, 0 refused on a read-only connection);
+  - one connection serves one document; a frame for another closes it with 1008;
+  - a handler in this mode serves no y-websocket clients.
+- **`conformance/`:** generated editing scripts run through ygo, yjs 13.6.33 and yrs 0.28.1, alone and with replicas of each exchanging V1 and V2 updates, and the same updates delivered out of order, twice, in alternating formats and merged. Failing scripts are shrunk. See `conformance/README.md` for what is compared and what is not, and `conformance/FINDINGS.md` for what it found, in ygo and in yrs 0.25.0.
+
+### Changed
+
+- **Applying edits is 30 to 100 times faster on the B4 editing trace:** 0.43 s for the trace in one transaction (48.1 s before, yjs 0.75 to 1.1 s on the same machine) and 0.52 s with a transaction per edit (15.1 s, yjs 1.3 s). Search markers survive block merges and are used from both sides, a deletion leaves one behind, merging is one pass and stays near what was deleted, and events are built for observers only. `BENCHMARKS.md` has the numbers.
+
+### Tests
+
+- `server/stress_test.go`: six clients on each of four documents insert and delete at once, a third reconnect halfway, a late joiner reads the result, over y-websocket and Hocuspocus frames; `YGO_STRESS` scales it. Under the race detector it found that a Hocuspocus connection was sent its room's updates before its token was accepted (in the unreleased mode above; fixed, `TestHocuspocus_NoFanOutBeforeTheToken`).
+- `benchmarks`: `BenchmarkB4_TransactionPerEdit`.
+- New CI jobs: `conformance` (yjs and yrs references) and the providers in `hocuspocus`.
+
 ## [1.36.0] - 2026-11-10
 
 **Upgrade impact**:
