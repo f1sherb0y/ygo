@@ -1,0 +1,8 @@
+{
+  "name": "ygo-conformance-yjs",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "yjs": "13.6.33"
+  }
+}

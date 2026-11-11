@@ -1,0 +1,1 @@
+{"replicas":3,"gc":false,"surrogateSplits":true,"steps":[{"op":"tins","r":2,"n":28399,"s":" a🙂bקום","attrs":null,"key":"","text":"","from":0,"to":0},{"op":"tins","r":2,"n":64945,"s":"0a🙂b","attrs":null,"key":"","text":"","from":0,"to":0},{"op":"tins","r":2,"n":17333,"s":"é","attrs":null,"key":"","text":"","from":0,"to":0}]}
