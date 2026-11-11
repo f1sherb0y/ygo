@@ -141,6 +141,16 @@ same. A cursor kept as a relative position can therefore jump for other
 users after someone undoes. It is why the cross-replica check of
 positions leaves out scripts with an undo.
 
+### 12. A y-protocols client that has said nothing is seen by nobody
+
+A y-protocols awareness instance starts with the state `{}` at clock 0. A
+peer takes a state only when its clock is higher than the one it has, and
+for a client it has never heard of that is 0 as well: the first state
+never arrives. The client appears to others with its first real change
+(clock 1) and sees itself in its own list before that. ygo and yrs start
+without a state. The presence scripts therefore begin with every client
+setting one, as a client does when it connects.
+
 ## For a backend on yrs 0.25
 
 Either of findings 6 and 7 moves a replica away from the others for good,
@@ -154,7 +164,7 @@ On Windows 11, amd64, Go 1.27.3, Node 24.12:
   seventeen profiles, every arrangement in README.md, with yjs 13.6.33 and
   yrs 0.28.1; seeds 1000 to 1399 of the ten profiles without undo,
   positions and snapshots.
-- `TestAwareness`: seeds 0 to 299 with ygo, y-protocols 1.0.7 and yrs
+- `TestAwareness`: seeds 0 to 2999 with ygo, y-protocols 1.0.7 and yrs
   0.28.1, three to five clients, alone and mixed. The six profiles with them found no difference
   between ygo and yjs; that they can was checked by breaking each of the
   three in the ygo replica.

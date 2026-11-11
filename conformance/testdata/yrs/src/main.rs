@@ -361,10 +361,7 @@ mod presence {
                 "anew" => {
                     let number = request["client"].as_u64().unwrap();
                     let client = super::version::client(number);
-                    let mut awareness = Awareness::new(yrs::Doc::with_client_id(number));
-                    // The empty state every y-protocols instance starts with.
-                    awareness.set_local_state_raw("{}");
-                    instances.insert(id, awareness);
+                    instances.insert(id, Awareness::new(yrs::Doc::with_client_id(number)));
                     KNOWN.with(|known| known.borrow_mut().insert(id, vec![client]));
                     json!({})
                 }

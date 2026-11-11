@@ -20,6 +20,13 @@ type presenceStep struct {
 func presenceScript(seed uint64, clients, steps int) []presenceStep {
 	rng := rand.New(rand.NewPCG(seed, 0xa3a7))
 	var script []presenceStep
+	// Everyone says who they are first, as a client does when it connects.
+	// Until it has, there is nothing to compare: a y-protocols instance
+	// starts with an empty state that its peers never take (FINDINGS.md,
+	// 12), the others start with none.
+	for client := range clients {
+		script = append(script, presenceStep{Op: "set", R: client, State: map[string]any{"user": map[string]any{"name": pick(rng, words)}}})
+	}
 	for range steps {
 		switch k := rng.IntN(10); {
 		case k < 4:

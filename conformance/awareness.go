@@ -29,11 +29,8 @@ type PresenceImplementation interface {
 
 type ygoPresence struct{ a *ygo.Awareness }
 
-// NewPresence starts with the empty state every y-protocols instance
-// starts with.
 func (ygoImplementation) NewPresence(clientID uint64) (Presence, error) {
-	a := ygo.NewAwareness(clientID)
-	return ygoPresence{a}, a.SetLocalStateJSON(map[string]any{})
+	return ygoPresence{ygo.NewAwareness(clientID)}, nil
 }
 
 func (p ygoPresence) Set(state any) (err error) {
