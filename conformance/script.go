@@ -38,17 +38,14 @@ type Script struct {
 	Replicas int    `json:"replicas"`
 	GC       bool   `json:"gc"`
 	Steps    []Step `json:"steps"`
-	// SurrogateSplits says that a step may insert or delete inside a
-	// surrogate pair. yjs and ygo replace the halves with U+FFFD; yrs does
-	// not survive it (FINDINGS.md), so such scripts leave yrs out.
-	SurrogateSplits bool `json:"surrogateSplits,omitempty"`
 }
 
 // Profile selects which kinds of steps a generated script contains.
 type Profile struct {
 	Text, Format, Embed, Array, Map, Nested, XML bool
 	// Astral adds characters outside the Basic Multilingual Plane, which
-	// take two UTF-16 units, to inserted text.
+	// take two UTF-16 units, to inserted text. A position may then fall
+	// between the two, where yjs replaces both halves with U+FFFD.
 	Astral bool
 	// Whole keeps every position off the middle of those characters.
 	Whole bool
@@ -115,7 +112,7 @@ func randomValue(rng *rand.Rand, depth int) any {
 // the same script.
 func Generate(seed uint64, replicas, steps int, profile Profile) Script {
 	rng := rand.New(rand.NewPCG(seed, 0x9e3779b97f4a7c15))
-	script := Script{Replicas: replicas, GC: seed%4 != 0, SurrogateSplits: profile.Astral && !profile.Whole}
+	script := Script{Replicas: replicas, GC: seed%4 != 0}
 	var kinds []string
 	add := func(on bool, names ...string) {
 		if on {

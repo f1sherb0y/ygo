@@ -179,8 +179,15 @@ func TestMergeUpdatesV2_Converges(t *testing.T) {
 
 // TestUpdateUtils_EmptyInputs: the empty-input contracts.
 func TestUpdateUtils_EmptyInputs(t *testing.T) {
-	if got, err := ygo.MergeUpdatesV2(nil); err != nil || got != nil {
-		t.Errorf("MergeUpdatesV2(nil) = %v, %v; want nil, nil", got, err)
+	// No updates merge into the empty update, the bytes yjs returns, which
+	// every reader accepts.
+	empty := ygo.NewDoc()
+	if got, err := ygo.MergeUpdates(nil); err != nil || !bytes.Equal(got, []byte{0, 0}) || ygo.ApplyUpdate(empty, got) != nil {
+		t.Errorf("MergeUpdates(nil) = %x, %v; want 0000", got, err)
+	}
+	wantV2 := []byte{0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0}
+	if got, err := ygo.MergeUpdatesV2(nil); err != nil || !bytes.Equal(got, wantV2) || ygo.ApplyUpdateV2(empty, got) != nil {
+		t.Errorf("MergeUpdatesV2(nil) = %x, %v; want %x", got, err, wantV2)
 	}
 	// SV from the empty document's update is the empty SV (one zero byte:
 	// a zero client count).

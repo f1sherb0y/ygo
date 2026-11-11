@@ -30,11 +30,44 @@ fn within(n: u64, length: u32) -> u32 {
     ((n * length as u64) >> 16) as u32
 }
 
+// The three places where yrs 0.25 and 0.28 differ: numbers and client IDs.
+#[cfg(feature = "yrs-025")]
+mod version {
+    use super::*;
+    pub fn number(n: f64) -> Any {
+        Any::Number(n)
+    }
+    pub fn from_number(n: &f64) -> Value {
+        json!(n)
+    }
+    pub fn client(id: u64) -> u64 {
+        id
+    }
+}
+#[cfg(not(feature = "yrs-025"))]
+mod version {
+    use super::*;
+    pub fn number(n: f64) -> Any {
+        // What JavaScript stores: one kind of number.
+        Any::Number(yrs::Number::Float(n))
+    }
+    pub fn from_number(n: &yrs::Number) -> Value {
+        match n {
+            yrs::Number::Int(n) => json!(n),
+            yrs::Number::Float(n) => json!(n),
+        }
+    }
+    pub fn client(id: u64) -> yrs::block::ClientID {
+        yrs::block::ClientID::new(id)
+    }
+}
+use version::{client, from_number, number};
+
 fn to_any(value: &Value) -> Any {
     match value {
         Value::Null => Any::Null,
         Value::Bool(b) => Any::Bool(*b),
-        Value::Number(n) => Any::Number(n.as_f64().unwrap()),
+        Value::Number(n) => number(n.as_f64().unwrap()),
         Value::String(s) => Any::String(Arc::from(s.as_str())),
         Value::Array(items) => Any::Array(items.iter().map(to_any).collect()),
         Value::Object(entries) => Any::Map(Arc::new(
@@ -46,7 +79,8 @@ fn from_any(value: &Any) -> Value {
     match value {
         Any::Null | Any::Undefined => Value::Null,
         Any::Bool(b) => json!(b),
-        Any::Number(n) => json!(n),
+        Any::Number(n) => from_number(n),
+        #[cfg(feature = "yrs-025")]
         Any::BigInt(n) => json!(n),
         Any::String(s) => json!(s.as_ref()),
         Any::Buffer(b) => json!(hex(b)),
@@ -124,7 +158,7 @@ struct Replica {
 }
 
 fn new_replica(client_id: u64, gc: bool) -> Replica {
-    let mut options = Options::with_client_id(client_id);
+    let mut options = Options::with_client_id(client(client_id));
     options.offset_kind = OffsetKind::Utf16;
     options.skip_gc = !gc;
     let doc = Doc::with_options(options);
@@ -280,6 +314,15 @@ fn handle(replicas: &mut HashMap<u64, Replica>, request: &Value) -> Value {
             }
         }
         "dump" => json!({ "dump": dump(&replicas[&id]) }),
+        "merge" => {
+            let updates: Vec<Vec<u8>> =
+                request["updates"].as_array().unwrap().iter().map(|u| unhex(u.as_str().unwrap())).collect();
+            let merged = if v2 { yrs::merge_updates_v2(&updates) } else { yrs::merge_updates_v1(&updates) };
+            match merged {
+                Ok(merged) => json!({ "hex": hex(&merged) }),
+                Err(error) => json!({ "error": format!("merge: {error}") }),
+            }
+        }
         other => json!({ "error": format!("unknown command {other}") }),
     }
 }

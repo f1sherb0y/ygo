@@ -25,7 +25,38 @@ func normal(v any) any {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		panic(err)
 	}
-	return out
+	return joinRuns(out)
+}
+
+// joinRuns joins neighbouring text runs with the same attributes. A delta
+// starts a new run at every format item, also at one that changes nothing,
+// and which of those a replica still holds depends on the cleanups it ran.
+func joinRuns(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		for k := range v {
+			v[k] = joinRuns(v[k])
+		}
+	case []any:
+		out := v[:0]
+		for _, item := range v {
+			item = joinRuns(item)
+			if run, ok := item.(map[string]any); ok && len(out) > 0 {
+				if last, ok := out[len(out)-1].(map[string]any); ok {
+					a, isA := last["insert"].(string)
+					b, isB := run["insert"].(string)
+					_, hasA := last["insert"]
+					if isA && isB && hasA && len(last) == len(run) && reflect.DeepEqual(last["attributes"], run["attributes"]) {
+						last["insert"] = a + b
+						continue
+					}
+				}
+			}
+			out = append(out, item)
+		}
+		return out
+	}
+	return v
 }
 
 // decodeStateVector reads a state vector: implementations write the clients

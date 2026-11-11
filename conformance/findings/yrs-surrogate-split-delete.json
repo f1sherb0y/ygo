@@ -1,1 +1,0 @@
-{"replicas":3,"gc":true,"surrogateSplits":true,"steps":[{"op":"tins","r":1,"n":34637,"s":"a🙂b👨‍👩‍👧","attrs":null,"key":"","text":"","from":0,"to":0},{"op":"sync","r":0,"n":0,"s":"","attrs":null,"key":"","text":"","from":1,"to":0,"v":2},{"op":"tdel","r":0,"n":51134,"k":2,"s":"","attrs":null,"key":"","text":"","from":0,"to":0}]}

@@ -14,7 +14,23 @@ type ygoImplementation struct{}
 func (ygoImplementation) Name() string { return "ygo" }
 
 func (ygoImplementation) New(clientID uint64, gc bool) (Replica, error) {
-	return &ygoReplica{ygo.NewDocWithOptions(ygo.Options{ClientID: clientID, DisableGC: !gc})}, nil
+	d := ygo.NewDocWithOptions(ygo.Options{ClientID: clientID, DisableGC: !gc})
+	// The roots get their types now, as the drivers of yjs and yrs give
+	// them: yjs cleans up formatting after remote changes only in a text
+	// it knows to be one, and ygo does the same.
+	ygo.NewText(d, "text")
+	ygo.NewArray(d, "arr")
+	ygo.NewMap(d, "map")
+	ygo.NewXmlFragment(d, "xml")
+	return &ygoReplica{d}, nil
+}
+
+func (ygoImplementation) Merge(updates [][]byte, version int) (merged []byte, err error) {
+	defer guard(&err)
+	if version == 2 {
+		return ygo.MergeUpdatesV2(updates)
+	}
+	return ygo.MergeUpdates(updates)
 }
 
 type ygoReplica struct{ doc *ygo.Doc }

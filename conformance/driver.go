@@ -15,6 +15,8 @@ import (
 type Implementation interface {
 	Name() string
 	New(clientID uint64, gc bool) (Replica, error)
+	// Merge combines updates of one format version into one update.
+	Merge(updates [][]byte, version int) ([]byte, error)
 }
 
 // Replica is one document of one implementation.
@@ -104,6 +106,18 @@ func (d *Driver) New(clientID uint64, gc bool) (Replica, error) {
 	d.next++
 	_, err := d.call(map[string]any{"cmd": "new", "id": d.next, "client": clientID, "gc": gc})
 	return &driverReplica{d, d.next}, err
+}
+
+func (d *Driver) Merge(updates [][]byte, version int) ([]byte, error) {
+	encoded := make([]string, len(updates))
+	for i, u := range updates {
+		encoded[i] = hex.EncodeToString(u)
+	}
+	a, err := d.call(map[string]any{"cmd": "merge", "updates": encoded, "v": version})
+	if err != nil {
+		return nil, err
+	}
+	return hex.DecodeString(a.Hex)
 }
 
 type driverReplica struct {

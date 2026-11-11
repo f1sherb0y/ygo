@@ -15,6 +15,8 @@ var (
 	seeds    = flag.Int("seeds", 200, "scripts per profile")
 	firstRun = flag.Uint64("seed", 0, "first seed")
 	one      = flag.String("script", "", "a script file for TestScript")
+	failures = flag.String("failures", "", "directory to write shrunk failing scripts to")
+	oldYrs   = flag.Bool("yrs-0.25", false, "use yrs 0.25.0 (conformance/yrs-0.25), which has the defects in FINDINGS.md")
 )
 
 // references starts the reference implementations that are installed (see
@@ -30,6 +32,9 @@ func references(t *testing.T) (yjs, yrs *Driver) {
 		yjs = d
 	}
 	exe := filepath.Join("yrs", "target", "release", "ygo-conformance-yrs")
+	if *oldYrs {
+		exe = filepath.Join("yrs-0.25", "target", "release", "ygo-conformance-yrs-025")
+	}
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}
@@ -115,7 +120,7 @@ func check(script Script, yjs, yrs *Driver) string {
 			}
 		}
 	}
-	if yrs != nil && !script.SurrogateSplits {
+	if yrs != nil {
 		// yrs resolves an index next to deleted items to another position
 		// than yjs (FINDINGS.md), so its documents are not compared with
 		// ygo's: replicas of both must agree with each other.

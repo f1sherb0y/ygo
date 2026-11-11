@@ -1,0 +1,9 @@
+{
+  "what": "yrs 0.25.0 keeps an item alive that an applied update deletes, when delete sets arrive before the items they name (fixed in 0.28.1)",
+  "updates": [
+    "0001020201010502",
+    "01010202c802000201017e00",
+    "000102010201",
+    "01010200080103617272027706d7a7d795d79d7601016377016100"
+  ]
+}

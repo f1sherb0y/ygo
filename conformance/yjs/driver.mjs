@@ -103,6 +103,10 @@ function handle(request) {
       else Y.applyUpdate(doc, unhex(request.update))
       return {}
     case 'dump': return { dump: dump(doc) }
+    case 'merge': {
+      const updates = request.updates.map(unhex)
+      return { hex: hex(request.v === 2 ? Y.mergeUpdatesV2(updates) : Y.mergeUpdates(updates)) }
+    }
     default: throw new Error(`unknown command ${request.cmd}`)
   }
 }
