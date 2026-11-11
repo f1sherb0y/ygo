@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"math/rand/v2"
 	"os"
 	"strconv"
@@ -16,7 +17,8 @@ import (
 )
 
 // stressScale multiplies the size of the stress tests: YGO_STRESS=10 for a
-// soak, 1 (the default) for the ordinary test run.
+// soak, 1 (the default) for the ordinary test run. YGO_STRESS_CLIENTS sets
+// the number of clients per document (6).
 func stressScale() int {
 	if n, err := strconv.Atoi(os.Getenv("YGO_STRESS")); err == nil && n > 0 {
 		return n
@@ -63,7 +65,11 @@ func (e *editor) content() (string, string) {
 // with the same text.
 func TestStress_ConcurrentEditorsConverge(t *testing.T) {
 	scale := stressScale()
-	const documents, perDocument = 4, 6
+	const documents = 4
+	perDocument := 6
+	if n, err := strconv.Atoi(os.Getenv("YGO_STRESS_CLIENTS")); err == nil && n > 0 {
+		perDocument = n
+	}
 	edits := 120 * scale
 	for _, hocuspocus := range []bool{false, true} {
 		name := "y-websocket"
@@ -93,7 +99,7 @@ func TestStress_ConcurrentEditorsConverge(t *testing.T) {
 								at := rng.Uint64N(length)
 								err = e.text.Delete(txn, at, min(1+rng.Uint64N(3), length-at))
 							} else {
-								err = e.text.Insert(txn, rng.Uint64N(length+1), fmt.Sprintf("%c%d ", 'a'+c, i%10))
+								err = e.text.Insert(txn, rng.Uint64N(length+1), fmt.Sprintf("%c%d ", 'a'+c%26, i%10))
 							}
 							txn.Commit()
 							if err != nil {
@@ -126,7 +132,9 @@ func TestStress_ConcurrentEditorsConverge(t *testing.T) {
 				late.connect(t, url, fmt.Sprintf("stress-%d", d), hocuspocus)
 				room = append(room, late)
 
-				deadline := time.Now().Add(30 * time.Second)
+				// The clients are in this process too and still have the
+				// room's updates to apply: the wait grows with the room.
+				deadline := time.Now().Add(time.Duration(30*scale*(1+perDocument/6)) * time.Second)
 				for {
 					text, clocks := room[0].content()
 					same := text != ""
@@ -141,7 +149,7 @@ func TestStress_ConcurrentEditorsConverge(t *testing.T) {
 					if time.Now().After(deadline) {
 						for i, e := range room {
 							text, clocks := e.content()
-							t.Logf("document %d, client %d: %d bytes, clocks %s", d, i, len(text), clocks)
+							t.Logf("document %d, client %d: %d bytes, text %08x, clocks %08x", d, i, len(text), crc32.ChecksumIEEE([]byte(text)), crc32.ChecksumIEEE([]byte(clocks)))
 						}
 						t.Fatalf("document %d did not converge", d)
 					}

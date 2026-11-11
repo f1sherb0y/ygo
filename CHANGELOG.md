@@ -34,11 +34,11 @@ file.
 
 ### Changed
 
-- **Applying edits is 30 to 100 times faster on the B4 editing trace:** 0.43 s for the trace in one transaction (48.1 s before, yjs 0.75 to 1.1 s on the same machine) and 0.52 s with a transaction per edit (15.1 s, yjs 1.3 s). Search markers survive block merges and are used from both sides, a deletion leaves one behind, merging is one pass and stays near what was deleted, and events are built for observers only. `BENCHMARKS.md` has the numbers.
+- **Applying edits is 30 to 100 times faster on the B4 editing trace:** 0.43 s for the trace in one transaction (48.1 s before, yjs 0.75 to 1.1 s on the same machine) and 0.52 s with a transaction per edit (15.1 s, yjs 1.3 s). Search markers survive block merges and are used from both sides, a deletion leaves one behind, merging is one pass and stays near what was deleted, and events are built for observers only. Integrating among concurrent insertions at one place no longer allocates a set per item passed (B2.1: 1.17 s to 0.34 s). `BENCHMARKS.md` has the numbers.
 
 ### Tests
 
-- `server/stress_test.go`: six clients on each of four documents insert and delete at once, a third reconnect halfway, a late joiner reads the result, over y-websocket and Hocuspocus frames; `YGO_STRESS` scales it. Under the race detector it found that a Hocuspocus connection was sent its room's updates before its token was accepted (in the unreleased mode above; fixed, `TestHocuspocus_NoFanOutBeforeTheToken`).
+- `server/stress_test.go`: six clients on each of four documents insert and delete at once, a third reconnect halfway, a late joiner reads the result, over y-websocket and Hocuspocus frames; `YGO_STRESS` scales the edits and `YGO_STRESS_CLIENTS` the clients per document (run with 200: 800 connections). Under the race detector it found that a Hocuspocus connection was sent its room's updates before its token was accepted (in the unreleased mode above; fixed, `TestHocuspocus_NoFanOutBeforeTheToken`).
 - `benchmarks`: `BenchmarkB4_TransactionPerEdit`.
 - New CI jobs: `conformance` (yjs and yrs references) and the providers in `hocuspocus`.
 

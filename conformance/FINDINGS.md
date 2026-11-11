@@ -104,18 +104,22 @@ yrs fixes both; so does a server on ygo.
 
 On Windows 11, amd64, Go 1.27.3, Node 24.12:
 
-- `TestDifferential`: seeds 0 to 299 of each of the ten profiles, every
-  arrangement in README.md, with yjs 13.6.33 and yrs 0.28.1. Earlier runs
-  on this branch: seeds 0 to 399.
-- `TestDelivery`: seeds 0 to 299.
+- `TestDifferential` and `TestDelivery`: seeds 0 to 299 and 1000 to 1399
+  of each of the ten profiles, every arrangement in README.md, with yjs
+  13.6.33 and yrs 0.28.1.
 - `TestFindings`: the three reproducers.
-- The module's fuzz targets (13), 45 seconds each.
+- The module's fuzz targets (13), 45 seconds each, and the three that
+  apply updates and undo again after the speed changes, 40 seconds each.
+- `edit_model_test.go`: 30,000 edits on a text and 20,000 on an array, a
+  transaction each, against a slice, four seeds each.
 - `go test -race ./...` on Linux (Go 1.26 in a container), with the stress
   test at `YGO_STRESS=2`.
 - `server/stress_test.go`: 4 documents, 6 clients each, 120 edits per
-  client (960 at `YGO_STRESS=8`), a third of the clients reconnecting
-  halfway, one late joiner per document, over y-websocket and Hocuspocus
-  frames.
+  client, a third of the clients reconnecting halfway, one late joiner per
+  document, over y-websocket and Hocuspocus frames. Also run with 960
+  edits per client (`YGO_STRESS=8`), with 48 clients per document and 480
+  edits each, and with 200 clients per document (800 connections, 96,000
+  edits, each sent to 199 others), clients and server in one process.
 - `testdata/e2e/hocuspocus-provider.mjs`: `@hocuspocus/provider` 4.8.0,
   3.4.4 and 2.15.3 against the ygo server, 48 checks.
 

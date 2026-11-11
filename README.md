@@ -192,7 +192,7 @@ defer unsub()
 - **Hocuspocus is a mode of the server, not an addition to it.** A handler with `Options.Hocuspocus` serves `@hocuspocus/provider` (2.15, 3.4 and 4.8 are checked in CI) and no `y-websocket` clients; one connection serves one document, so providers that share a `HocuspocusProviderWebsocket` between documents are refused. Hocuspocus's server extensions are JavaScript and do not exist here.
 - **Message size.** The server reads client messages up to 4 MiB by default. A larger one (the first sync of a larger document) closes the connection with 1009, and the client reconnects and resends it in a loop. Raise `ReadLimit` (`yserve -read-limit`) above your largest document.
 - **Any values.** An object with more than one key comes back with its keys sorted, and a format attribute set to undefined comes back as null; see [Strings and values](#strings-and-values).
-- **Speed.** Applying edits is in the range of yjs on a real editing trace; many clients inserting at the same position (B2.1) is still slow. See [Benchmarks](#benchmarks).
+- **Speed.** Applying edits is in the range of yjs on a real editing trace, and V2 encoding about 4× slower. The other workloads have no yjs timing from the same machine. See [Benchmarks](#benchmarks).
 
 ### Status by layer
 

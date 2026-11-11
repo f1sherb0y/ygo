@@ -201,15 +201,19 @@ iterations: read the direction, not the digits):
 | B1.8  |     6.4 |    1.6 |
 | B1.10 |     2.3 |    4.4 |
 | B1.11 |    35.8 |   21.8 |
-| B2.1  |  1170.2 | 1112.3 |
-| B2.2  |    32.3 |   22.7 |
+| B2.1  |  1170.2 |  341.9 |
+| B2.2  |    32.3 |   17.6 |
 | B2.3  |   112.1 |   48.8 |
 | B2.4  |    16.0 |    9.3 |
 | B3.1  |    20.6 |   10.6 |
 | B3.4  |   357.9 |  275.8 |
 
-B1.10 (prepending to an array) is slower and B2.1 (many clients
-inserting at index 0) has not moved: neither was looked into.
+- **Concurrent insertions at one place share one set.** Integrating an
+  item among concurrent ones made a new map for every item it passed
+  (B2.1). In the server stress test with 100 clients on a document this
+  was most of the time: 16.6 s before, 6.2 s after.
+
+B1.10 (prepending to an array) is slower; it was not looked into.
 
 ## Same-machine comparison with yjs
 
