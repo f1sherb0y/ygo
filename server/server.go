@@ -142,6 +142,24 @@ type Options struct {
 	// the doc regardless of whether the callback is set.
 	OnStateless syncpkg.StatelessHandler
 
+	// OnAuthorize is OnAuthenticate for an application whose tokens
+	// decide more than yes or no: it also gets the ID of the connection
+	// (the one OnConnect and OnDisconnect get), and what it returns says
+	// whether the connection may write. A share link that only lets its
+	// holder read and a session that may edit are two tokens for one
+	// document; Options.ReadOnly, which sees the upgrade request and no
+	// token, cannot tell them apart. When set, OnAuthenticate is not
+	// called, and a Grant overrides what Options.ReadOnly said. A provider
+	// that sends a new token (a renewed session) is authorized again, and
+	// its scope follows the new Grant.
+	OnAuthorize func(connID, docName, token string) (Grant, error)
+
+	// OnStatelessFrom is OnStateless with the ID of the connection the
+	// message came from, for an application that answers it
+	// (Server.SendStateless) or needs to know who sent it. Both are called
+	// when both are set.
+	OnStatelessFrom func(connID, docName, payload string)
+
 	// OnConnect, when set, is called once a connection has been admitted
 	// to its room (past the per-doc and global caps) but before the
 	// initial sync is sent. It receives a stable per-connection id
@@ -489,6 +507,11 @@ type Server struct {
 	// check and cannot overshoot) and dropped in releaseConn; an atomic so
 	// the decrement, which runs outside docsMu, is safe.
 	totalConns atomic.Int64
+
+	// connsByID holds every connection from newConn to releaseConn under
+	// the ID its callbacks get (string to *conn), for the methods in
+	// sessions.go.
+	connsByID sync.Map
 
 	// slowClientsClosed counts connections chosen for closing because they
 	// fell behind their send queue (Stats.SlowClientsClosed).
@@ -981,7 +1004,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		c.route = route
 		c.routePrefix = syncpkg.EncodeRoute(route)
 		c.handler.AckUpdates = true
-		if s.opts.OnAuthenticate != nil {
+		if s.opts.OnAuthenticate != nil || s.opts.OnAuthorize != nil {
 			// Nothing of the document leaves before the token is accepted.
 			c.handler.RequireAuth = true
 			c.handler.OnAuthenticated = func() error {
@@ -1251,6 +1274,7 @@ func (s *Server) admitConn(ctx context.Context, docName string, ws *websocket.Co
 	}
 	c = s.newConn(state, ws)
 	if !state.addConn(c, s.maxConnsPerDoc()) {
+		s.connsByID.Delete(c.idForLog)
 		return nil, state, false, nil
 	}
 	// A successful admission un-idles the document. Under docsMu (we hold it
@@ -1269,6 +1293,7 @@ func (s *Server) admitConn(ctx context.Context, docName string, ws *websocket.Co
 // and closes its socket, so every released connection ends with its
 // transport closed.
 func (s *Server) releaseConn(ctx context.Context, state *docState, c *conn) {
+	s.connsByID.Delete(c.idForLog)
 	state.connsMu.Lock()
 	delete(state.conns, c)
 	remaining := len(state.conns)
@@ -1452,8 +1477,29 @@ func (s *Server) newConn(state *docState, ws *websocket.Conn) *conn {
 	h.Broadcast = c.broadcast
 	h.DocName = state.name
 	h.OnAuthenticate = s.opts.OnAuthenticate
+	if authorize := s.opts.OnAuthorize; authorize != nil {
+		// Runs on the connection's read goroutine, where ReadOnly is read.
+		h.OnAuthenticate = func(docName, token string) error {
+			grant, err := authorize(id, docName, token)
+			if err != nil {
+				return err
+			}
+			h.ReadOnly = grant.ReadOnly
+			return nil
+		}
+	}
 	h.OnStateless = s.opts.OnStateless
+	if from := s.opts.OnStatelessFrom; from != nil {
+		plain := s.opts.OnStateless
+		h.OnStateless = func(docName, payload string) {
+			if plain != nil {
+				plain(docName, payload)
+			}
+			from(id, docName, payload)
+		}
+	}
 	c.handler = h
+	s.connsByID.Store(id, c)
 	return c
 }
 

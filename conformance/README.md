@@ -61,7 +61,7 @@ implementation's own API. After every script all replicas are synced with
 each other and must hold the same document with the same state vector.
 
 yrs is held to convergence, not to equality with yjs: next to deleted
-content it does not place a local insertion where yjs does (FINDINGS.md, 6), so two runs of the same script that never exchange updates
+content it does not place a local insertion where yjs does (FINDINGS.md, 8), so two runs of the same script that never exchange updates
 need not agree. Mixed with the others it must still converge with them.
 
 The profiles:

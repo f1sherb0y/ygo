@@ -301,6 +301,18 @@ func (c *Conn) handleSync(frame *Frame) error {
 			}
 			return nil
 		}
+		// An update with nothing in it, which is what a client that
+		// has nothing new answers the server's SyncStep1 with on every
+		// connection, changes nothing: it is acknowledged and goes no
+		// further. Broadcast is also what stores an update and tells
+		// the application about it, and a row per reconnect is not a
+		// change to the document.
+		if isEmptyUpdate(frame.Payload) {
+			if c.AckUpdates {
+				return c.Send(EncodeSyncStatus(true))
+			}
+			return nil
+		}
 		// Apply (which queues missing deps in encoding.Pending) and
 		// broadcast as a SyncUpdate to all peers including self.
 		// Self-echo is safe because V1 updates are idempotent — see
@@ -320,6 +332,12 @@ func (c *Conn) handleSync(frame *Frame) error {
 	default:
 		return fmt.Errorf("%w: %d", ErrUnknownSyncSubType, frame.SyncSub)
 	}
+}
+
+// isEmptyUpdate reports whether a V1 update is the empty one: no structs
+// and no deletions.
+func isEmptyUpdate(update []byte) bool {
+	return len(update) == 2 && update[0] == 0 && update[1] == 0
 }
 
 func (c *Conn) handleAwareness(frame *Frame) error {

@@ -292,3 +292,118 @@ func TestHocuspocus_NoFanOutBeforeTheToken(t *testing.T) {
 		t.Errorf("a connection without a token was sent % x", raw)
 	}
 }
+
+// The token decides what a connection may do, the server answers one
+// connection and tells all of them, and ends a connection whose access is
+// gone: what an application with share links needs of a Hocuspocus server.
+func TestHocuspocus_SessionsByToken(t *testing.T) {
+	var srv *server.Server
+	ids := make(chan string, 4)
+	url, srv := startTestServer(t, server.Options{
+		Hocuspocus:     true,
+		OriginPatterns: []string{"*"},
+		OnAuthorize: func(connID, docName, token string) (server.Grant, error) {
+			switch token {
+			case "editor":
+				ids <- connID
+				return server.Grant{}, nil
+			case "viewer":
+				ids <- connID
+				return server.Grant{ReadOnly: true}, nil
+			}
+			return server.Grant{}, errors.New("no")
+		},
+		OnStatelessFrom: func(connID, docName, payload string) {
+			if !srv.SendStateless(connID, "you said "+payload) {
+				t.Errorf("no answer to %s", connID)
+			}
+			srv.BroadcastStateless(docName, "someone said "+payload)
+		},
+	})
+	open := func(token, scope string) (*hpConn, string) {
+		c := hpDial(t, url, "doc")
+		c.send(syncpkg.EncodeAuthToken(token))
+		if f := c.until(isType(syncpkg.MessageAuth)); f.AuthSub != syncpkg.AuthAuthenticated || string(f.Payload) != scope {
+			t.Fatalf("token %q: auth reply %d %q, want scope %q", token, f.AuthSub, f.Payload, scope)
+		}
+		return c, <-ids
+	}
+	editor, editorID := open("editor", syncpkg.ScopeReadWrite)
+	viewer, viewerID := open("viewer", syncpkg.ScopeReadOnly)
+
+	// The same document, two tokens: one writes, one is refused.
+	viewer.send(syncpkg.EncodeSyncUpdate(update(t, "k", "viewer")))
+	if ack := viewer.until(isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 0 {
+		t.Error("the viewer's update was accepted")
+	}
+	editor.send(syncpkg.EncodeSyncUpdate(update(t, "k", "editor")))
+	if ack := editor.until(isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 1 {
+		t.Error("the editor's update was refused")
+	}
+
+	// A stateless message is answered to its sender and told to everyone.
+	editor.send(syncpkg.EncodeStateless("hello"))
+	stateless := func(c *hpConn, want string) {
+		t.Helper()
+		c.until(func(f *syncpkg.Frame) bool { return f.Type == syncpkg.MessageStateless && string(f.Payload) == want })
+	}
+	stateless(editor, "you said hello")
+	stateless(editor, "someone said hello")
+	stateless(viewer, "someone said hello")
+
+	if got := srv.Connections("doc"); len(got) != 2 {
+		t.Errorf("connections %v, want two", got)
+	}
+	// The viewer's link is revoked: its connection ends, the editor's stays.
+	if !srv.Disconnect(viewerID, syncpkg.CloseStatusUnauthorized, "revoked") {
+		t.Fatal("the viewer's connection was not found")
+	}
+	for {
+		frame, status := viewer.read()
+		if frame != nil {
+			continue
+		}
+		if status != syncpkg.CloseStatusUnauthorized {
+			t.Errorf("the viewer was closed with %d, want %d", status, syncpkg.CloseStatusUnauthorized)
+		}
+		break
+	}
+	editor.send(syncpkg.EncodeStateless("still here"))
+	stateless(editor, "you said still here")
+	// Gone is gone: neither call finds the viewer any more.
+	deadline := time.Now().Add(5 * time.Second)
+	for srv.SendStateless(viewerID, "x") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if srv.SendStateless(viewerID, "x") || srv.Disconnect(viewerID, websocket.StatusNormalClosure, "") {
+		t.Error("a closed connection is still known")
+	}
+	_ = editorID
+}
+
+// A client with nothing new answers the server's SyncStep1 with an empty
+// update on every connection. That is acknowledged, and is no change: the
+// application is not told and nothing is stored.
+func TestHocuspocus_AnEmptyUpdateIsNoChange(t *testing.T) {
+	changes := make(chan []byte, 4)
+	url, _ := startTestServer(t, server.Options{
+		Hocuspocus:     true,
+		OriginPatterns: []string{"*"},
+		OnChange:       func(_ string, u []byte) { changes <- append([]byte(nil), u...) },
+	})
+	c := hpDial(t, url, "doc")
+	c.send(syncpkg.EncodeSyncStep2(ygo.EncodeStateAsUpdate(ygo.NewDoc())))
+	if ack := c.until(isType(syncpkg.MessageSyncStatus)); ack.Payload[0] != 1 {
+		t.Error("the empty update was refused")
+	}
+	c.send(syncpkg.EncodeSyncUpdate(update(t, "k", "v")))
+	c.until(isType(syncpkg.MessageSyncStatus))
+	if got := <-changes; len(got) <= 2 {
+		t.Errorf("OnChange got the empty update % x", got)
+	}
+	select {
+	case extra := <-changes:
+		t.Errorf("OnChange was called twice, the second time with % x", extra)
+	default:
+	}
+}

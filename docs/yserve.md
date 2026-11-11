@@ -139,8 +139,15 @@ the provider's `unsyncedChanges`. What differs from a Hocuspocus server:
 - In this mode the handler serves no `y-websocket` clients. Embedders
   who need both mount two `server.Server`s; they do not share documents.
 - yserve itself checks no tokens. Embed the `server` package and set
-  `OnAuthenticate` (and `ReadOnly`) for that: nothing of a document is
-  sent to a connection before its token was accepted.
+  `OnAuthorize` for that: it gets the token and says whether the
+  connection may write, and nothing of a document is sent to a
+  connection before its token was accepted. `SendStateless`,
+  `BroadcastStateless` and `Disconnect` on the `Server` are the
+  counterparts of a Hocuspocus server's `connection.sendStateless`,
+  `document.broadcastStateless` and `connection.close`.
+  `testdata/e2e/backend` is a complete small backend built this way:
+  tokens for editors and viewers, a stored row per update, replay,
+  revocation.
 - Hocuspocus extensions are JavaScript; the equivalents here are Go
   callbacks plus the `persist.Store` interface for storage backends.
 

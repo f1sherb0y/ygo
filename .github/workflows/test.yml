@@ -190,6 +190,15 @@ jobs:
       - name: run the providers against it
         working-directory: testdata/e2e
         run: node hocuspocus-provider.mjs "$RUNNER_TEMP/hpserver"
+      # An application backend on the ygo server (tokens that decide the
+      # scope, a row per update, a snapshot and replay, stateless answers,
+      # revocation, a restart), driven by provider 3.4 as a web editor
+      # drives it.
+      - name: build the application backend
+        run: go build -o "$RUNNER_TEMP/backend" ./testdata/e2e/backend
+      - name: run an editor's session against it
+        working-directory: testdata/e2e
+        run: node backend.mjs "$RUNNER_TEMP/backend"
 
   conformance:
     name: conformance (yjs and yrs running)

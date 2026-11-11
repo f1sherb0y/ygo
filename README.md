@@ -192,7 +192,7 @@ defer unsub()
 - **Hocuspocus is a mode of the server, not an addition to it.** A handler with `Options.Hocuspocus` serves `@hocuspocus/provider` (2.15, 3.4 and 4.8 are checked in CI) and no `y-websocket` clients; one connection serves one document, so providers that share a `HocuspocusProviderWebsocket` between documents are refused. Hocuspocus's server extensions are JavaScript and do not exist here.
 - **Message size.** The server reads client messages up to 4 MiB by default. A larger one (the first sync of a larger document) closes the connection with 1009, and the client reconnects and resends it in a loop. Raise `ReadLimit` (`yserve -read-limit`) above your largest document.
 - **Any values.** An object with more than one key comes back with its keys sorted, and a format attribute set to undefined comes back as null; see [Strings and values](#strings-and-values).
-- **Speed.** Applying edits is in the range of yjs on a real editing trace, and V2 encoding about 4× slower. The other workloads have no yjs timing from the same machine. See [Benchmarks](#benchmarks).
+- **Speed.** Applying edits is in the range of yjs on a real editing trace, and V2 encoding about 4× slower. The other workloads have no yjs timing from the same machine. `benchmarks.TestBudget_EditingSession` holds ceilings on time, allocations and memory for an editing session. See [Benchmarks](#benchmarks).
 
 ### Status by layer
 
@@ -287,11 +287,12 @@ See [BENCHMARKS.md](BENCHMARKS.md) for the full table. B4 (259,778-edit real-wor
 
 **How to read this:**
 
+- **yrs 0.28.1**, native, takes 4.0 to 4.2 s for the trace with a transaction per edit on the same machine.
 - **Applying edits** was about 20× slower than yjs up to v1.36.0 (48 s and 15 s for the two rows above on this machine). Position lookups, block merging and event building were the cost; see BENCHMARKS.md.
 - **Document sizes match yjs** when the client IDs match. With a random client ID, ygo's V1 document is 377 KB and yjs's 311 KB, because ygo's random IDs are 53-bit and yjs 13's are 32-bit. V2 stays at 160 KB for both.
 - **Encode and parse** were measured on an Apple M3 with v1.31.0 (BENCHMARKS.md): in the same range as yjs, except V2 encode, which is about 4× slower.
 
-No head-to-head timing against native yrs exists. Its results are compared in [conformance/](conformance).
+yrs is timed on the same trace in BENCHMARKS.md, and its results are compared in [conformance/](conformance).
 
 ## Roadmap
 

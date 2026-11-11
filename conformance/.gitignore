@@ -1,3 +1,4 @@
 /testdata/yjs/node_modules/
 /testdata/yrs/target/
 /testdata/yrs-0.25/target/
+/testdata/yrs-bench/target/

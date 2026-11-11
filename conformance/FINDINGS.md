@@ -21,7 +21,27 @@ its room before its token was accepted, and the room's updates were sent to
 it meanwhile. Found by the race detector on `server/stress_test.go`;
 `TestHocuspocus_NoFanOutBeforeTheToken` holds it.
 
-### 3. Speed
+### 3. The server stored a row for every reconnect (fixed)
+
+A client that has nothing new still answers the server's SyncStep1, with
+the empty update. The server treated it as a change: broadcast to the
+room, a row in the store, a call to `OnChange`. A backend that keeps a
+row per update for replay got one for every connection anyone made. Found
+by `testdata/e2e/backend.mjs`, where the row numbers after a restart were
+one further than the edits.
+
+### 4. A token could not decide the scope (added)
+
+`Options.ReadOnly` sees the upgrade request, and a Hocuspocus provider
+sends its token later, in a message. A document with editors and viewers
+told apart by their tokens could not be served. `Options.OnAuthorize`
+answers with the scope; with it came the ways for the server to answer a
+connection, tell a document and close a connection
+(`SendStateless`, `BroadcastStateless`, `Disconnect`), without which
+a backend can neither confirm that an edit is stored nor end a revoked
+session.
+
+### 5. Speed
 
 Not a difference in results, but what stood between ygo and a server that
 commits every edit on its own. See BENCHMARKS.md: on the B4 editing trace a
@@ -31,7 +51,7 @@ transaction per edit took 15.1 s and takes 0.52 s.
 
 Run `go test ./conformance/ -yrs-0.25` to see these fail.
 
-### 4. A deletion is lost when it reaches past what the replica has
+### 6. A deletion is lost when it reaches past what the replica has
 
 `yrs-0.25-lost-delete.json`. An update deletes clocks of a client of which
 the replica holds only the first part, or nothing yet. yrs 0.25.0 applies
@@ -45,7 +65,7 @@ sync repairs it.
 This needs nothing unusual: two updates of one client arriving in the other
 order, as they do when a server relays them from two connections.
 
-### 5. An index inside a surrogate pair corrupts the document
+### 7. An index inside a surrogate pair corrupts the document
 
 `yrs-0.25-surrogate-split-insert.json`, `-delete.json`. Inserting or
 deleting at a UTF-16 index between the two halves of a character outside
@@ -59,7 +79,7 @@ UTF-16 units and an editor binding computes positions from them.
 
 ## Differences that are not defects
 
-### 6. Where an insertion lands next to deleted content
+### 8. Where an insertion lands next to deleted content
 
 An index next to deleted items names several places in the structure:
 before the tombstones, after them, or between two. yjs and yrs do not pick
@@ -70,7 +90,7 @@ structures afterwards, which shows once concurrent edits arrive. ygo
 follows yjs. This is why the tests hold yrs to convergence and not to
 equality with yjs.
 
-### 7. yjs formatting depends on its search markers
+### 9. yjs formatting depends on its search markers
 
 In yjs, what `insert` does with the formatting in force at the position
 can depend on whether a search marker led there or the walk started at the
@@ -79,7 +99,7 @@ index. The scripts therefore give explicit attributes with
 every rich-text insertion, and the yjs driver drops the markers of the root
 text before each step.
 
-### 8. Format cleanup can remove what a concurrent edit needed
+### 10. Format cleanup can remove what a concurrent edit needed
 
 After a remote transaction yjs removes format items that have become
 redundant (`cleanupYTextAfterTransaction`). An item that is redundant now
@@ -96,7 +116,7 @@ conformance replicas create their roots first, as an application does.
 
 ## For a backend on yrs 0.25
 
-Either of findings 4 and 5 moves a replica away from the others for good,
+Either of findings 6 and 7 moves a replica away from the others for good,
 without an error. Upgrading yrs fixes both.
 
 ## What was run
@@ -119,6 +139,10 @@ On Windows 11, amd64, Go 1.27.3, Node 24.12:
   edits per client (`YGO_STRESS=8`), with 48 clients per document and 480
   edits each, and with 200 clients per document (800 connections, 96,000
   edits, each sent to 199 others), clients and server in one process.
+- `testdata/e2e/backend.mjs`: 26 checks of an application backend on the
+  server with provider 3.4.4 (see its head for the list).
+- `benchmarks.TestBudget_EditingSession`: 100,000 generated edits within
+  the ceilings set there.
 - `testdata/e2e/hocuspocus-provider.mjs`: `@hocuspocus/provider` 4.8.0,
   3.4.4 and 2.15.3 against the ygo server, 48 checks.
 

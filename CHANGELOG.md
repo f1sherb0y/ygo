@@ -19,6 +19,7 @@ file.
 **Upgrade impact**:
 
 - **`MergeUpdates(nil)` and `MergeUpdatesV2(nil)` return the empty update**, as yjs does, where they returned nil, which nothing accepts as an update.
+- **An empty update is no change.** A client with nothing new answers the server's SyncStep1 with the empty update on every connection. The server broadcast it, stored it as a row and called `OnChange` with it; now it acknowledges it and does nothing else.
 - **A type nobody observes gets no event built.** Observers see what they saw; a deep observer registered by a callback during the same transaction still gets the events it would have got.
 - **Block boundaries after a deletion can differ** from what v1.36.0 left: blocks are merged around the deleted ranges only. Documents and the updates between replicas are unaffected; the 307 fixtures pass unchanged.
 
@@ -30,6 +31,10 @@ file.
   - every update is answered with a SyncStatus (1 applied, 0 refused on a read-only connection);
   - one connection serves one document; a frame for another closes it with 1008;
   - a handler in this mode serves no y-websocket clients.
+- **Tokens that decide the scope, and a server that can speak first:**
+  - `Options.OnAuthorize(connID, docName, token) (Grant, error)` is `OnAuthenticate` with the connection's ID and an answer that says whether the connection may write, so that one document has editors and viewers by their tokens. A provider that sends a new token gets the scope of the new grant;
+  - `Options.OnStatelessFrom(connID, docName, payload)`, `Server.SendStateless(connID, payload)` and `Server.BroadcastStateless(docName, payload)`: answer one connection, tell a document;
+  - `Server.Disconnect(connID, code, reason)` and `Server.Connections(docName)`: end the connections of an access that was revoked.
 - **`conformance/`:** generated editing scripts run through ygo, yjs 13.6.33 and yrs 0.28.1, alone and with replicas of each exchanging V1 and V2 updates, and the same updates delivered out of order, twice, in alternating formats and merged. Failing scripts are shrunk. See `conformance/README.md` for what is compared and what is not, and `conformance/FINDINGS.md` for what it found, in ygo and in yrs 0.25.0.
 
 ### Changed
@@ -39,7 +44,9 @@ file.
 ### Tests
 
 - `server/stress_test.go`: six clients on each of four documents insert and delete at once, a third reconnect halfway, a late joiner reads the result, over y-websocket and Hocuspocus frames; `YGO_STRESS` scales the edits and `YGO_STRESS_CLIENTS` the clients per document (run with 200: 800 connections). Under the race detector it found that a Hocuspocus connection was sent its room's updates before its token was accepted (in the unreleased mode above; fixed, `TestHocuspocus_NoFanOutBeforeTheToken`).
-- `benchmarks`: `BenchmarkB4_TransactionPerEdit`.
+- `testdata/e2e/backend` and `backend.mjs` (CI job `hocuspocus`): an application backend on the server, with editor and viewer tokens, a stored row per update, a snapshot, replay from the rows, a durability question answered over stateless messages, revocation and a restart, driven by `@hocuspocus/provider` 3.4.4. 26 checks. It is what found the empty update above and the missing scope per token.
+- `edit_model_test.go`: long editing sessions on a text and an array against a slice.
+- `benchmarks`: `BenchmarkB4_TransactionPerEdit`, and `TestBudget_EditingSession`: ceilings on time, allocations per edit, heap per character and stored size for a generated session of 100,000 edits.
 - New CI jobs: `conformance` (yjs and yrs references) and the providers in `hocuspocus`.
 
 ## [1.36.0] - 2026-11-10
