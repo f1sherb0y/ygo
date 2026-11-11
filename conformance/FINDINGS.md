@@ -96,9 +96,8 @@ conformance replicas create their roots first, as an application does.
 
 ## For a backend on yrs 0.25
 
-Findings 4 and 5 are in the release ShareCode's server builds on. Either
-moves a replica away from the others for good, without an error. Upgrading
-yrs fixes both; so does a server on ygo.
+Either of findings 4 and 5 moves a replica away from the others for good,
+without an error. Upgrading yrs fixes both.
 
 ## What was run
 
