@@ -93,6 +93,10 @@ type TransactionMut struct {
 	// longer says which clocks this transaction deleted.
 	deletedRanges []DeletedRange
 
+	// gcNested is set once this commit collected the children of a deleted
+	// type, whose cells lie outside the deleted ranges.
+	gcNested bool
+
 	// changedTypes records, per branch whose user-observable state
 	// changed this transaction, which map keys changed and whether
 	// positional content changed. Drives observer dispatch at Commit.
@@ -389,6 +393,19 @@ func (t *TransactionMut) gcDeleted() {
 	// the first GC'd clock so the run collapses (and can also absorb a
 	// deleted left neighbour). TrySquash already refuses to merge kept
 	// items, so tracked tombstones stay distinct.
+	//
+	// A few deletions that collected no nested type, which is every
+	// ordinary edit, merge around their own ranges only: the pass from the
+	// first deleted clock to the end of the client's history is the same
+	// work for one deleted character as for a thousand.
+	if !t.gcNested && len(t.deletedRanges) <= 8 {
+		for _, r := range t.deletedRanges {
+			if list := bs.GetClient(r.ID.Client); list != nil {
+				list.SquashClocks(r.ID.Clock, r.ID.Clock+r.Len)
+			}
+		}
+		return
+	}
 	for c, minClock := range touched {
 		list := bs.GetClient(c)
 		if list == nil {
@@ -440,6 +457,7 @@ func (t *TransactionMut) gcDeletedItem(it *block.Item, touched map[uint64]uint64
 // (walk Left). touched records the smallest affected clock per client so
 // the caller's merge pass collapses the adjacent GC cells into one run.
 func (t *TransactionMut) gcNestedChildren(br *block.Branch, touched map[uint64]uint64) {
+	t.gcNested = true
 	bs := t.doc.store
 	gcItem := func(it *block.Item) {
 		// Depth-first: collapse this child's own subtree first, so a

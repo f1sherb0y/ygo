@@ -153,6 +153,118 @@ below for a random client ID.
   landed. A transaction per edit takes 22.9 s against 20.3 s for one
   transaction, so commit-time work is not the main cost.
 
+## After v1.36.0: applying edits
+
+The tables above and the M3 comparison below were measured before the
+changes described here and have not been run again on that machine.
+
+Measured on 11 Nov 2026 on an AMD Ryzen AI 9 HX 370 under Windows 11,
+Go 1.27.3, yjs 13.6.33 on Node 24.12, yrs 0.28.1 built with rustc 1.98.1 in release
+build. B4 with client ID 1; ygo with
+`go test -bench=B4 -benchtime=3x ./benchmarks/`, yjs with
+`node conformance/testdata/yjs/b4.mjs`, yrs with
+`cargo run --release` in `conformance/testdata/yrs-bench` (three rounds
+each).
+
+| B4, apply edits         | v1.36.0 |    now |          yjs |         yrs |
+|-------------------------|--------:|-------:|-------------:|------------:|
+| one transaction         |  48.1 s | 0.43 s | 0.75-1.11 s  | see below   |
+| a transaction per edit  |  15.1 s | 0.52 s | 1.26-1.30 s  | 4.00-4.15 s |
+
+yrs with a transaction per edit, an update observer and UTF-16 offsets,
+as a server uses it, ends with the same document to the byte. With the
+whole trace in one transaction the same program was stopped after more
+than 30 minutes without having finished one round; why was not looked
+into, and nothing here says it is how yrs is meant to be used.
+
+The document is the same to the byte (223,414 V1, 159,921 V2). What
+changed:
+
+- **Search markers survive a block merge.** Merging two blocks at commit
+  dropped every marker of the type, so the first lookup after each commit
+  walked from the start of the text. The marker of the merged block now
+  moves to the block it was merged into, as yjs does.
+- **Lookups walk left as well as right.** A position just before a marker
+  was reached from the start of the text; it is reached from the marker
+  now. A deletion leaves a marker at its place. Together these are what a
+  held backspace needed.
+- **Merging is one pass.** Each merged block used to shift the rest of
+  the client's block list.
+- **After a deletion, blocks are merged around what was deleted**, not
+  from the first deleted clock to the end of the client's history.
+- **Events are built for observers only.** Every commit built the delta
+  of each changed text, a walk over the whole text, whether or not
+  anything observed it.
+
+B1 to B3 on the same machine, `-benchtime=3x`, ops in ms (three
+iterations: read the direction, not the digits):
+
+| ID    | v1.36.0 |    now |
+|-------|--------:|-------:|
+| B1.1  |    16.7 |    5.5 |
+| B1.3  |    15.8 |    1.0 |
+| B1.4  |    71.4 |   22.8 |
+| B1.5  |   367.0 |   84.1 |
+| B1.6  |     6.7 |    1.8 |
+| B1.7  |    24.2 |   13.9 |
+| B1.8  |     6.4 |    1.6 |
+| B1.10 |     2.3 |    4.4 |
+| B1.11 |    35.8 |   21.8 |
+| B2.1  |  1170.2 |  341.9 |
+| B2.2  |    32.3 |   17.6 |
+| B2.3  |   112.1 |   48.8 |
+| B2.4  |    16.0 |    9.3 |
+| B3.1  |    20.6 |   10.6 |
+| B3.4  |   357.9 |  275.8 |
+
+- **Concurrent insertions at one place share one set.** Integrating an
+  item among concurrent ones made a new map for every item it passed
+  (B2.1). In the server stress test with 100 clients on a document this
+  was most of the time: 16.6 s before, 6.2 s after.
+
+B1.10 in the table is noise: three iterations of a millisecond. With
+`-benchtime=30x -count=5` it is 1.2 to 1.8 ms before and 0.84 to 0.96 ms
+now, and B1.8 4.8 to 5.4 ms before and 1.2 to 1.8 ms now.
+
+### yrs on the synthetic workloads
+
+Four of the B1 workloads (6000 edits of one character in one transaction)
+in `conformance/testdata/yrs-bench` (`cargo run --release -- synthetic`,
+best of 30) next to ygo (`-benchtime=30x -count=3`), same machine. The
+random positions come from different generators, so B1.4 and B1.7 are the
+same shape of work, not the same edits.
+
+| ID   | Workload                        |      ygo |     yrs |
+|------|---------------------------------|---------:|--------:|
+| B1.1 | append text                     | 4.2-5.7 ms | 70 ms |
+| B1.3 | prepend text                    | 1.3-1.6 ms | 1.0 ms |
+| B1.4 | insert at random positions      |  22 ms | 36 ms |
+| B1.7 | insert and delete at random     | 14-21 ms | 28 ms |
+
+yrs's append in one transaction is what its B4 run in one transaction
+above shows at 43 times the size.
+
+### Budgets
+
+`benchmarks.TestBudget_EditingSession` runs with the ordinary tests: a
+generated session of 100,000 edits, a transaction each, typed into one
+document and applied update by update to another. It fails when a
+ceiling is passed:
+
+| What                                   | Measured | Ceiling |
+|----------------------------------------|---------:|--------:|
+| typing, whole session                  |   0.35 s |     3 s |
+| receiving, whole session               |   0.25 s |     4 s |
+| allocations per edit, typing           |       28 |      60 |
+| allocations per update, receiving      |       46 |      90 |
+| live heap per UTF-16 unit ever typed   | 94 bytes |     200 |
+| V1 document per unit ever typed        |      2.9 |       6 |
+
+The time ceilings are wide because CI machines are slow and shared; they
+catch a return to walking the document at every edit, not a 20% loss
+(the perf workflow compares head with base for that). They are skipped
+under the race detector and with `YGO_BUDGET_TIME=off`.
+
 ## Same-machine comparison with yjs
 
 B4 on one Apple M3, measured on 8 Nov 2026: ygo v1.31.0 on Go 1.26.3,

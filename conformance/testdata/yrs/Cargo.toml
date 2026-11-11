@@ -1,0 +1,19 @@
+[package]
+name = "ygo-conformance-yrs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+# Set by ../yrs-0.25, which builds this source against that release.
+yrs-025 = []
+
+[dependencies]
+yrs = "=0.28.1"
+serde_json = "1"
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+[workspace]

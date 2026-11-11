@@ -3,6 +3,8 @@ package store
 import (
 	"fmt"
 	"sort"
+
+	"github.com/Deln0r/ygo/internal/block"
 )
 
 // ClientBlockList is the dense, clock-ordered list of every block
@@ -104,41 +106,89 @@ func (l *ClientBlockList) Insert(index int, cell BlockCell) {
 // preserved because TrySquash extends the surviving cell to cover the
 // absorbed cell's clocks.
 func (l *ClientBlockList) SquashFrom(startIdx int) int {
+	return l.squash(startIdx, len(l.list))
+}
+
+// SquashClocks is SquashFrom for the cells that hold the clocks from start
+// to end and the one after them: what a deletion of exactly those clocks
+// can have made mergeable, with the cell before and the cell after it.
+// The cells further on are not looked at, which is what makes a commit
+// that deleted one character cost the same in a long history as in a
+// short one (yjs tryMergeDeleteSet walks the deleted ranges the same way).
+func (l *ClientBlockList) SquashClocks(start, end uint64) int {
+	from, ok := l.FindPivot(start)
+	if !ok {
+		return 0
+	}
+	to := len(l.list)
+	if i, ok := l.FindPivot(end); ok {
+		to = i + 1
+	}
+	return l.squash(from, to)
+}
+
+// squash merges the cells from startIdx up to (not including) endIdx,
+// each into the one before it where that is allowed.
+func (l *ClientBlockList) squash(startIdx, endIdx int) int {
 	if startIdx < 1 {
 		startIdx = 1
 	}
-	removed := 0
-	for i := startIdx; i >= 1 && i < len(l.list); {
-		prev := l.list[i-1]
-		cur := l.list[i]
+	if endIdx > len(l.list) {
+		endIdx = len(l.list)
+	}
+	if startIdx >= endIdx {
+		return 0
+	}
+	// One pass: the cells before w are final, r reads the rest. A cell
+	// either merges into the last final one or becomes the next. Removing
+	// each merged cell on its own instead moved the whole tail once per
+	// merge, quadratic in a transaction that typed a long text.
+	w := startIdx
+	for r := startIdx; r < endIdx; r++ {
+		prev := l.list[w-1]
+		cur := l.list[r]
 		switch {
 		case prev.Kind == CellKindItem && cur.Kind == CellKindItem &&
-			prev.Item != nil && cur.Item != nil &&
-			prev.Item.TrySquash(cur.Item):
-			// cur merged into prev; its Item is now detached from the
-			// list. Any search marker pointing at the absorbed item is
-			// stale, so invalidate the branch's marker cache. This is
-			// cheap and does not regress positional walks: after squash
-			// the branch holds far fewer items, so a marker-less walk is
-			// already O(items).
-			if br := prev.Item.Parent.Branch; br != nil && br.Markers != nil {
-				br.Markers.Invalidate()
-			}
-			l.list = append(l.list[:i], l.list[i+1:]...)
-			removed++
+			prev.Item != nil && cur.Item != nil && squashItems(prev.Item, cur.Item):
+			// cur merged into prev; its Item is detached from the list.
 		case prev.Kind == CellKindGC && cur.Kind == CellKindGC:
 			// Collapse two adjacent garbage-collected runs into one,
 			// matching yjs's merge of contiguous GC structs. This is the
 			// run that forms when a deleted shared type's children are
 			// each replaced with a GC cell (see ReplaceWithGC).
-			l.list[i-1] = CellOfGC(prev.GC.Start, cur.GC.End)
-			l.list = append(l.list[:i], l.list[i+1:]...)
-			removed++
+			l.list[w-1] = CellOfGC(prev.GC.Start, cur.GC.End)
 		default:
-			i++
+			l.list[w] = cur
+			w++
 		}
 	}
+	removed := endIdx - w
+	if removed == 0 {
+		return 0
+	}
+	n := w + copy(l.list[w:], l.list[endIdx:])
+	clear(l.list[n:])
+	l.list = l.list[:n]
 	return removed
+}
+
+// squashItems merges right into left when Item.TrySquash allows it, and
+// moves a search marker on right over to left: the merged item starts where
+// left did. The other markers of the branch stay valid, since a merge moves
+// nothing else (yjs Item.mergeWith does the same). Dropping them all here
+// made the lookup after every commit walk from the start of the text.
+func squashItems(left, right *block.Item) bool {
+	var shift uint64
+	if !left.IsDeleted() && left.IsCountable() {
+		shift = left.Len
+	}
+	if !left.TrySquash(right) {
+		return false
+	}
+	if br := left.Parent.Branch; br != nil && br.Markers != nil {
+		br.Markers.Repoint(right, left, shift)
+	}
+	return true
 }
 
 // MergeWithLefts merges the cell at pos into its left neighbour, and the
@@ -150,10 +200,7 @@ func (l *ClientBlockList) MergeWithLefts(pos int) int {
 		prev, cur := l.list[i-1], l.list[i]
 		switch {
 		case prev.Kind == CellKindItem && cur.Kind == CellKindItem &&
-			prev.Item != nil && cur.Item != nil && prev.Item.TrySquash(cur.Item):
-			if br := prev.Item.Parent.Branch; br != nil && br.Markers != nil {
-				br.Markers.Invalidate()
-			}
+			prev.Item != nil && cur.Item != nil && squashItems(prev.Item, cur.Item):
 		case prev.Kind == CellKindGC && cur.Kind == CellKindGC:
 			l.list[i-1] = CellOfGC(prev.GC.Start, cur.GC.End)
 		default:

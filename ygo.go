@@ -618,8 +618,8 @@ func MissingSV(d *Doc) []byte {
 }
 
 // MergeUpdates coalesces V1 update blobs into a single equivalent V1
-// update. Returns nil for an empty input - nil is not itself a valid
-// update, so guard the length before feeding the result onward.
+// update. No updates merge into the empty update, as in yjs: the result is
+// always a valid update.
 //
 // Nothing is dropped. A block whose causal dependencies are absent from
 // the merged set is preserved, and the clocks nobody supplied come out as
@@ -633,12 +633,6 @@ func MissingSV(d *Doc) []byte {
 // Used by persistence layers for compaction (Flush) and by transports
 // that want to batch-coalesce updates before sending.
 func MergeUpdates(updates [][]byte) ([]byte, error) {
-	// Use the persist package's helper directly — the function is
-	// stateless and re-exporting it would create a dependency cycle
-	// between root ygo and persist. Inline the small wrapper here.
-	if len(updates) == 0 {
-		return nil, nil
-	}
 	// GC off: a merge carries deleted content, as yjs mergeUpdates does;
 	// whoever applies the result collects it, or keeps it with GC off.
 	d := doc.NewDocWithOptions(doc.Options{DisableGC: true})
@@ -661,15 +655,12 @@ func MergeUpdates(updates [][]byte) ([]byte, error) {
 // MergeUpdatesV2 is the V2 counterpart of MergeUpdates, with the same
 // contract: nothing is dropped, holes come out as Skip runs, and the
 // result may not integrate fully into an empty document until the missing
-// history arrives. Returns nil for an empty input.
+// history arrives. No updates merge into the empty update.
 //
 // The two formats carry a Skip's length differently - V2 puts it in the
 // rest stream rather than the len column - so the emitters are separate
 // code paths with separate tests.
 func MergeUpdatesV2(updates [][]byte) ([]byte, error) {
-	if len(updates) == 0 {
-		return nil, nil
-	}
 	// GC off: a merge carries deleted content, as yjs mergeUpdates does;
 	// whoever applies the result collects it, or keeps it with GC off.
 	d := doc.NewDocWithOptions(doc.Options{DisableGC: true})

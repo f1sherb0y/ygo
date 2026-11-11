@@ -254,6 +254,9 @@ func TestServer_Persistence_StateSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Registered before the server's own cleanup so that it runs after it:
+	// Windows cannot remove the temporary directory while the file is open.
+	t.Cleanup(func() { _ = store2.Close() })
 	wsURL2, _ := startTestServer(t, server.Options{
 		Store:          store2,
 		OriginPatterns: []string{"*"},

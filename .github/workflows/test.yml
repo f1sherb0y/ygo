@@ -183,6 +183,55 @@ jobs:
       - name: run the checks
         working-directory: testdata/e2e
         run: node hocuspocus.mjs "$RUNNER_TEMP/hpclient"
+      # The other direction: stock @hocuspocus/provider 4.8, 3.4 and 2.15
+      # against the ygo server with Options.Hocuspocus.
+      - name: build the Go server
+        run: go build -o "$RUNNER_TEMP/hpserver" ./testdata/e2e/hpserver
+      - name: run the providers against it
+        working-directory: testdata/e2e
+        run: node hocuspocus-provider.mjs "$RUNNER_TEMP/hpserver"
+      # An application backend on the ygo server (tokens that decide the
+      # scope, a row per update, a snapshot and replay, stateless answers,
+      # revocation, a restart), driven by provider 3.4 as a web editor
+      # drives it.
+      - name: build the application backend
+        run: go build -o "$RUNNER_TEMP/backend" ./testdata/e2e/backend
+      - name: run an editor's session against it
+        working-directory: testdata/e2e
+        run: node backend.mjs "$RUNNER_TEMP/backend"
+
+  conformance:
+    name: conformance (yjs and yrs running)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      # Generated editing scripts through ygo, yjs and yrs, alone and mixed
+      # (conformance/README.md). Without this job the test job still runs
+      # the package, but only ygo against itself: the references are not
+      # installed there.
+      - name: install yjs
+        working-directory: conformance/testdata/yjs
+        run: npm ci
+      - name: build the yrs driver
+        working-directory: conformance/testdata/yrs
+        run: cargo build --release --locked
+      - name: run the scripts
+        env:
+          # Fail, do not pass on ygo alone, when a reference did not start.
+          YGO_CONFORMANCE_REQUIRE: "1"
+        run: go test ./conformance/ -seeds 200 -failures "$RUNNER_TEMP/conformance"
+      - name: keep the failing scripts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-failures
+          path: ${{ runner.temp }}/conformance
 
   gomobile-android:
     name: gomobile bind (Android)

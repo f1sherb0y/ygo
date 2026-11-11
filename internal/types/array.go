@@ -187,10 +187,18 @@ func (a *Array) Delete(txn *doc.TransactionMut, idx, length uint64) {
 	if idx >= end {
 		return
 	}
-	defer a.branch.Markers.ShrinkAfter(idx, end-idx)
+	// The markers inside the deleted range go, and one comes for the last
+	// element before it, so that the next edit here starts its walk there.
+	var anchor *block.Item
+	defer func() {
+		a.branch.Markers.ShrinkAfter(idx, end-idx)
+		rememberEndingAt(a.branch, anchor, idx)
+	}()
 
-	var counted uint64 = 0
-	cur := a.branch.Start
+	cur, counted := startFromMarker(a.branch, idx)
+	if cur == nil {
+		cur, counted = a.branch.Start, 0
+	}
 	for cur != nil && counted < end {
 		if cur.IsDeleted() || !cur.IsCountable() {
 			cur = cur.Right
@@ -202,6 +210,7 @@ func (a *Array) Delete(txn *doc.TransactionMut, idx, length uint64) {
 
 		if blockEnd <= idx {
 			counted = blockEnd
+			anchor = cur
 			cur = cur.Right
 			continue
 		}
@@ -218,6 +227,7 @@ func (a *Array) Delete(txn *doc.TransactionMut, idx, length uint64) {
 				cur = cur.Right
 				continue
 			}
+			anchor = cur
 			counted = idx
 			cur = right
 			blockStart = counted
@@ -365,16 +375,61 @@ func startFromMarker(branch *block.Branch, idx uint64) (*block.Item, uint64) {
 	if branch.Markers == nil {
 		return nil, 0
 	}
-	mk := branch.Markers.Nearest(idx)
-	if mk == nil || mk.Item == nil {
+	before, after := branch.Markers.Around(idx)
+	if before != nil && (before.Item == nil || before.Index == 0) {
+		before = nil
+	}
+	// The walk goes right from the marker before idx, or from the start of
+	// the list. When the marker after idx is nearer than either, it goes
+	// left from that one first, to the first live item that starts before
+	// idx, and right from there: what is found is what the walk from the
+	// start finds, sooner. Without this, deleting backwards through a long
+	// text (a held backspace) walked from the start for every character.
+	forward := idx
+	if before != nil {
+		forward = idx - before.Index
+	}
+	if after != nil && after.Item != nil && after.Index-idx < forward {
+		at := after.Index
+		for it := after.Item.Left; it != nil; it = it.Left {
+			if it.IsDeleted() || !it.IsCountable() || it.Content.Kind == block.KindFormat {
+				continue
+			}
+			if it.Len > at {
+				break // the marker was off: walk from the start
+			}
+			at -= it.Len
+			if at < idx {
+				branch.Markers.Touch(after)
+				return it, at
+			}
+		}
 		return nil, 0
 	}
-	// Forward-only: marker.Index must be <= idx and closer than 0.
-	if mk.Index > idx || mk.Index == 0 {
+	if before == nil {
 		return nil, 0
 	}
-	branch.Markers.Touch(mk)
-	return mk.Item, mk.Index
+	branch.Markers.Touch(before)
+	return before.Item, before.Index
+}
+
+// rememberEndingAt records a marker for the last live content at or left
+// of item, which ends at index end: it starts its own length before that.
+// A few tombstones or format items in between are stepped over; behind a
+// long run of them no marker is recorded.
+func rememberEndingAt(branch *block.Branch, item *block.Item, end uint64) {
+	for steps := 0; item != nil; item, steps = item.Left, steps+1 {
+		if item.IsDeleted() || !item.IsCountable() || item.Content.Kind == block.KindFormat {
+			if steps == 32 {
+				return
+			}
+			continue
+		}
+		if item.Len < end {
+			rememberMarker(branch, item, end-item.Len)
+		}
+		return
+	}
 }
 
 // rememberMarker records the (item, idx) pair so the next call

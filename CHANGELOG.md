@@ -14,6 +14,47 @@ ygo itself: the NATS backplane (`server/backplane/nats`) and the Matrix
 transport (`integration/matrix`). Their releases are listed at the end of this
 file.
 
+## [Unreleased]
+
+**Upgrade impact**:
+
+- **`MergeUpdates(nil)` and `MergeUpdatesV2(nil)` return the empty update**, as yjs does, where they returned nil, which nothing accepts as an update.
+- **An empty update is no change.** A client with nothing new answers the server's SyncStep1 with the empty update on every connection. The server broadcast it, stored it as a row and called `OnChange` with it; now it acknowledges it and does nothing else.
+- **Undo restores a subdocument reference**, on its own or inside a deleted type, as yjs does: a new reference with the same GUID and options. It was left deleted before.
+- **A type nobody observes gets no event built.** Observers see what they saw; a deep observer registered by a callback during the same transaction still gets the events it would have got.
+- **Block boundaries after a deletion can differ** from what v1.36.0 left: blocks are merged around the deleted ranges only. Documents and the updates between replicas are unaffected; the 307 fixtures pass unchanged.
+
+### Added
+
+- **The server serves `@hocuspocus/provider`** with `server.Options.Hocuspocus` (`yserve -hocuspocus`), checked with providers 4.8.0, 3.4.4 and 2.15.3:
+  - the document of a connection is the one its first frame names (`DocNameFn` is not called; `OnConnect` and `ReadOnly` get that name), and a connection that names none within `Options.HandshakeTimeout` (10 seconds) is closed;
+  - with `OnAuthenticate` set, nothing is sent to a connection, by the server or from its room, and nothing but Auth is accepted from it until its token was accepted; anything else closes it with 4401;
+  - every update is answered with a SyncStatus (1 applied, 0 refused on a read-only connection);
+  - one connection carries several documents, as providers that share a `HocuspocusProviderWebsocket` use it: each is a session with its own token, scope and connection ID, and a token refused for a document that joined later ends that session only;
+  - a handler in this mode serves no y-websocket clients.
+- **Tokens that decide the scope, and a server that can speak first:**
+  - `Options.OnAuthorize(connID, docName, token) (Grant, error)` is `OnAuthenticate` with the connection's ID and an answer that says whether the connection may write, so that one document has editors and viewers by their tokens. A provider that sends a new token gets the scope of the new grant;
+  - `Options.OnStatelessFrom(connID, docName, payload)`, `Server.SendStateless(connID, payload)` and `Server.BroadcastStateless(docName, payload)`: answer one connection, tell a document;
+  - `Server.Disconnect(connID, code, reason)` and `Server.Connections(docName)`: end the connections of an access that was revoked;
+  - `Options.OnSessionOpen(connID, docName)`: called once a connection's session is open (token accepted, initial sync on its way), from where `SendStateless` reaches it;
+  - `Options.OnChangeFrom(connID, docName, update)`: `OnChange` with the connection the update came from, for a stored row with its author;
+  - `Server.SetReadOnly(connID, readOnly)`: take writing away from a connection that is open, for a document closed for editing while people are in it.
+- **`conformance/`:** generated editing scripts run through ygo, yjs 13.6.33 and yrs 0.28.1, alone and with replicas of each exchanging V1 and V2 updates, and the same updates delivered out of order, twice, in alternating formats and merged. Failing scripts are shrunk. See `conformance/README.md` for what is compared and what is not, and `conformance/FINDINGS.md` for what it found, in ygo and in yrs 0.25.0.
+
+### Changed
+
+- **Applying edits is 30 to 100 times faster on the B4 editing trace:** 0.43 s for the trace in one transaction (48.1 s before, yjs 0.75 to 1.1 s on the same machine) and 0.52 s with a transaction per edit (15.1 s, yjs 1.3 s). Search markers survive block merges and are used from both sides, a deletion leaves one behind, merging is one pass and stays near what was deleted, and events are built for observers only. Integrating among concurrent insertions at one place no longer allocates a set per item passed (B2.1: 1.17 s to 0.34 s). `BENCHMARKS.md` has the numbers.
+
+### Tests
+
+- `server/stress_test.go`: six clients on each of four documents insert and delete at once, a third reconnect halfway, a late joiner reads the result, over y-websocket and Hocuspocus frames; `YGO_STRESS` scales the edits, `YGO_STRESS_CLIENTS` the clients per document and `YGO_STRESS_DOCS` the documents (run with 200 clients on each of four documents, and with 200 on one under the race detector). Under the race detector it found that a Hocuspocus connection was sent its room's updates before its token was accepted (in the unreleased mode above; fixed, `TestHocuspocus_NoFanOutBeforeTheToken`).
+- `testdata/e2e/backend` and `backend.mjs` (CI job `hocuspocus`): an application backend on the server that keeps the contract of an existing Hocuspocus-compatible backend message for message: tokens that say who and whether to write, renewal on the open connection, a colour, the room's language and the state of the store when a session opens, a writer that stores a row per update with its author and answers a durability barrier when the store has caught up, presence, a heartbeat, a room ended while people are in it, revocation with 4403, a snapshot and a restart. Driven by `@hocuspocus/provider` 3.4.4, 44 checks. It is what found the empty update above and what the hooks above were added for.
+- `conformance`: `TestAwareness` runs presence scripts (clients setting, changing and removing their state and telling each other what they know in any order) through ygo, y-protocols 1.0.7 and yrs, alone and mixed in one room; a `subdocuments` profile sets subdocuments under map keys in all three and compares the references and each replica's set of subdocuments; and every relative position any replica made is resolved by every replica at the end, yrs included.
+- `conformance`: six more profiles compare ygo with yjs on undo and redo (an undo manager per replica over text, rich text, arrays, maps, nested types and XML, with concurrent edits from others in between), on relative positions (their bytes, and where they resolve after everything that happened since) and on snapshots (what each restores).
+- `edit_model_test.go`: long editing sessions on a text and an array against a slice.
+- `benchmarks`: `BenchmarkB4_TransactionPerEdit`, and `TestBudget_EditingSession`: ceilings on time, allocations per edit, heap per character and stored size for a generated session of 100,000 edits.
+- New CI jobs: `conformance` (yjs and yrs references) and the providers in `hocuspocus`.
+
 ## [1.36.0] - 2026-11-10
 
 **Upgrade impact**:

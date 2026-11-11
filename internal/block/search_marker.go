@@ -74,6 +74,59 @@ func (m *MarkerList) Nearest(target uint64) *SearchMarker {
 	return &m.markers[bestIdx]
 }
 
+// Around returns the marker with the greatest Index at or before target
+// and the one with the smallest Index after it; either may be nil. A walk
+// to target can start at the first and go right, or at the second and go
+// left. The pointers are valid until the next list mutation, as for
+// Nearest.
+func (m *MarkerList) Around(target uint64) (before, after *SearchMarker) {
+	if m == nil {
+		return nil, nil
+	}
+	for i := range m.markers {
+		mk := &m.markers[i]
+		if mk.Index <= target {
+			if before == nil || mk.Index > before.Index {
+				before = mk
+			}
+		} else if after == nil || mk.Index < after.Index {
+			after = mk
+		}
+	}
+	return before, after
+}
+
+// Repoint moves the marker on from, an item that was merged into its left
+// neighbour to, onto to. shift is what to counted for before the merge:
+// its length if it is live and countable, else zero. The merged item
+// starts where to started, that much earlier. Every other marker stays as
+// it is: a merge changes no other item's position. Mirrors what yjs
+// Item.mergeWith does with its search markers.
+func (m *MarkerList) Repoint(from, to *Item, shift uint64) {
+	if m == nil {
+		return
+	}
+	at, has := -1, false
+	for i := range m.markers {
+		switch m.markers[i].Item {
+		case from:
+			at = i
+		case to:
+			has = true
+		}
+	}
+	if at < 0 {
+		return
+	}
+	if has || m.markers[at].Index < shift {
+		// to has its own marker already (or the marker was off): drop this one.
+		m.markers = append(m.markers[:at], m.markers[at+1:]...)
+		return
+	}
+	m.markers[at].Item = to
+	m.markers[at].Index -= shift
+}
+
 // Touch bumps the marker's timestamp so the next eviction skips
 // it. Call after a successful Nearest hit + walk.
 func (m *MarkerList) Touch(mk *SearchMarker) {

@@ -132,23 +132,30 @@ func (i *Item) Integrate(ctx IntegrateContext, offset uint64) bool {
 		// sound here because the store guarantees a single *Item per
 		// (Client, Clock) within a transaction. See
 		// docs/yrs-port-notes/integrate.md §7.3.
+		//
+		// yjs keeps two sets here: itemsBeforeOrigin, every item the
+		// scan has passed, and conflictingItems, those passed since
+		// newLeft last moved. scanned is both: the items in the order
+		// they were passed, the conflicting ones being those from
+		// conflictFrom on. Emptying the second set is moving that
+		// index, where a new map for every step of a long run of
+		// concurrent insertions was most of the cost of integrating.
 		newLeft := i.Left
-		conflictingItems := map[*Item]struct{}{}
-		itemsBeforeOrigin := map[*Item]struct{}{}
+		var scanned scannedItems
+		conflictFrom := 0
 
 		for o != nil {
 			if o == i.Right {
 				break
 			}
-			itemsBeforeOrigin[o] = struct{}{}
-			conflictingItems[o] = struct{}{}
+			scanned.add(o)
 			if originEqual(i.Origin, o.Origin) {
 				// Case 1: same origin. Tiebreaker by (Client, Clock):
 				// lower client comes first, so if o's client is
 				// strictly less than ours, o stays to our left.
 				if o.ID.Client < i.ID.Client {
 					newLeft = o
-					conflictingItems = map[*Item]struct{}{}
+					conflictFrom = scanned.len()
 				} else if originEqual(i.RightOrigin, o.RightOrigin) {
 					// We share both origins; the lower ID wins
 					// leftmost position. Since we are to the left of
@@ -164,10 +171,10 @@ func (i *Item) Integrate(ctx IntegrateContext, offset uint64) bool {
 					oOrigin = ctx.GetItem(*o.Origin)
 				}
 				if oOrigin != nil {
-					if _, before := itemsBeforeOrigin[oOrigin]; before {
-						if _, conflicting := conflictingItems[oOrigin]; !conflicting {
+					if at, before := scanned.position(oOrigin); before {
+						if at < conflictFrom {
 							newLeft = o
-							conflictingItems = map[*Item]struct{}{}
+							conflictFrom = scanned.len()
 						}
 					} else {
 						break
@@ -371,4 +378,46 @@ func (i *Item) TrySquash(other *Item) bool {
 		other.Parent.Branch.Map[*other.ParentSub] = i
 	}
 	return true
+}
+
+// scannedItems is the set of items a conflict scan has passed, each with
+// its place in the order of the scan. Most scans pass a handful of items:
+// those live in an array on the stack and are searched one by one. A long
+// run of concurrent insertions gets a map.
+type scannedItems struct {
+	small [16]*Item
+	n     int
+	index map[*Item]int
+}
+
+func (s *scannedItems) len() int { return s.n }
+
+func (s *scannedItems) add(it *Item) {
+	switch {
+	case s.index != nil:
+		s.index[it] = s.n
+	case s.n < len(s.small):
+		s.small[s.n] = it
+	default:
+		s.index = make(map[*Item]int, 4*len(s.small))
+		for at, old := range s.small {
+			s.index[old] = at
+		}
+		s.index[it] = s.n
+	}
+	s.n++
+}
+
+// position returns where in the scan it was passed.
+func (s *scannedItems) position(it *Item) (int, bool) {
+	if s.index != nil {
+		at, ok := s.index[it]
+		return at, ok
+	}
+	for at := range s.n {
+		if s.small[at] == it {
+			return at, true
+		}
+	}
+	return 0, false
 }

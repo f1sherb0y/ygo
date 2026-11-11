@@ -1,0 +1,25 @@
+# The same driver against yrs 0.25.0, the release the findings in
+# ../../FINDINGS.md were first seen on.
+[package]
+name = "ygo-conformance-yrs-025"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "ygo-conformance-yrs-025"
+path = "../yrs/src/main.rs"
+
+[features]
+default = ["yrs-025"]
+yrs-025 = []
+
+[dependencies]
+yrs = "=0.25.0"
+serde_json = "1"
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+[workspace]

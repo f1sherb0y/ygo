@@ -85,39 +85,55 @@ func dispatchEvents(t *doc.TransactionMut) {
 	// the order the types were first reached: yjs changedParentTypes. An
 	// event is recorded here before its shallow observers run, as yjs
 	// callTypeObservers does.
+	//
+	// An event is only built when somebody reads it: for a type with
+	// observers of its own right away, for the others when a deep observer
+	// above them turns out to want it. Building the delta of a text walks
+	// the whole text, which a document nobody observes paid at every commit.
+	type pending struct {
+		br *block.Branch
+		ev any
+	}
+	build := func(p *pending) any {
+		if p.ev != nil {
+			return p.ev
+		}
+		br := p.br
+		if keys := t.ChangedKeys(br); len(keys) > 0 {
+			p.ev = buildMapEvent(t, br, keys)
+		} else if br.TypeRef == block.TypeRefText || br.TypeRef == block.TypeRefXmlText {
+			// Positional change: Text (tagged TypeRefText by NewText) or
+			// XmlText, whose Observe takes a TextEvent too, vs Array (the
+			// default). Root branches otherwise share TypeRef
+			// zero, so we cannot rely on it for arrays; the Text tag is the
+			// one reliable discriminator.
+			p.ev = &TextEvent{Target: &Text{branch: br}, Delta: buildTextDelta(t, br)}
+		} else {
+			p.ev = &ArrayEvent{Target: &Array{branch: br}, Delta: buildPositionalDelta(t, br)}
+		}
+		return p.ev
+	}
 	var parents []*block.Branch
-	under := map[*block.Branch][]any{}
+	under := map[*block.Branch][]*pending{}
 
 	for _, br := range t.ChangedTypes() {
 		// A type deleted later in this transaction fires nothing.
 		if br.Item != nil && br.Item.IsDeleted() {
 			continue
 		}
-		var ev any
-		if keys := t.ChangedKeys(br); len(keys) > 0 {
-			ev = buildMapEvent(t, br, keys)
-		} else if t.PositionalChanged(br) {
-			// Positional change: Text (tagged TypeRefText by NewText) or
-			// XmlText, whose Observe takes a TextEvent too, vs Array (the
-			// default). Root branches otherwise share TypeRef
-			// zero, so we cannot rely on it for arrays; the Text tag is the
-			// one reliable discriminator.
-			if br.TypeRef == block.TypeRefText || br.TypeRef == block.TypeRefXmlText {
-				ev = &TextEvent{Target: &Text{branch: br}, Delta: buildTextDelta(t, br)}
-			} else {
-				ev = &ArrayEvent{Target: &Array{branch: br}, Delta: buildPositionalDelta(t, br)}
-			}
-		}
-		if ev == nil {
+		if len(t.ChangedKeys(br)) == 0 && !t.PositionalChanged(br) {
 			continue
 		}
+		p := &pending{br: br}
 		for anc := br; anc != nil; anc = ancestorBranch(anc) {
 			if _, seen := under[anc]; !seen {
 				parents = append(parents, anc)
 			}
-			under[anc] = append(under[anc], ev)
+			under[anc] = append(under[anc], p)
 		}
-		br.CallObservers(ev)
+		if br.ObserverCount() > 0 {
+			br.CallObservers(build(p))
+		}
 	}
 
 	// Deep observers run after every shallow one, each once, with the
@@ -142,16 +158,16 @@ func dispatchEvents(t *doc.TransactionMut) {
 			depth int
 		}
 		batch := make([]pathed, 0, len(under[anc]))
-		for _, ev := range under[anc] {
-			target := eventBranch(ev)
-			if target == nil || (target.Item != nil && target.Item.IsDeleted()) {
+		for _, p := range under[anc] {
+			target := p.br
+			if target.Item != nil && target.Item.IsDeleted() {
 				continue
 			}
 			path, ok := pathBetween(anc, target)
 			if !ok {
 				continue
 			}
-			batch = append(batch, pathed{ev: withPath(ev, path), depth: len(path)})
+			batch = append(batch, pathed{ev: withPath(build(p), path), depth: len(path)})
 		}
 		sort.SliceStable(batch, func(i, j int) bool { return batch[i].depth < batch[j].depth })
 		events := make([]any, len(batch))
@@ -165,19 +181,6 @@ func dispatchEvents(t *doc.TransactionMut) {
 // hasDeepObserver reports whether br has a deep observer now.
 func hasDeepObserver(br *block.Branch) bool {
 	return br.HasDeepObservers()
-}
-
-// eventBranch returns the branch an event is about.
-func eventBranch(ev any) *block.Branch {
-	switch e := ev.(type) {
-	case *MapEvent:
-		return e.Target.branch
-	case *ArrayEvent:
-		return e.Target.branch
-	case *TextEvent:
-		return e.Target.branch
-	}
-	return nil
 }
 
 // ancestorBranch returns the branch that directly contains br (the

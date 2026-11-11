@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Deln0r/ygo/internal/awareness"
 	"github.com/Deln0r/ygo/internal/doc"
@@ -95,6 +96,29 @@ type Conn struct {
 	// starts; it is read only on the connection's own read goroutine.
 	ReadOnly bool
 
+	// frozen is Freeze's flag.
+	frozen atomic.Bool
+
+	// RequireAuth, when true, makes the connection accept nothing but an
+	// Auth message until OnAuthenticate has accepted a token: any other
+	// message before that is ErrUnauthenticated. Hocuspocus providers send
+	// their token first. Without it, Auth is answered but not required.
+	RequireAuth bool
+
+	// Authenticated is set once a token was accepted.
+	Authenticated bool
+
+	// OnAuthenticated, when set, runs once, right after the Authenticated
+	// reply to the first accepted token. The transport sends the initial
+	// sync from it when that had to wait for the token.
+	OnAuthenticated func() error
+
+	// AckUpdates makes the connection answer every SyncStep2 and Update it
+	// receives with a SyncStatus, as a Hocuspocus server does: true when
+	// the update was applied, false when the connection is read-only. A
+	// Hocuspocus provider counts its unacknowledged changes by it.
+	AckUpdates bool
+
 	// AuthFailed reports whether this conn was rejected by the
 	// AuthHandler. The transport layer should check after each
 	// HandleFrame call and tear down the WS with code 4401 when
@@ -165,6 +189,9 @@ func (c *Conn) SendInitialSync() error {
 // unknown message types are silently ignored to preserve forward
 // compatibility with Hocuspocus extensions.
 func (c *Conn) HandleFrame(frame *Frame) error {
+	if c.RequireAuth && !c.Authenticated && frame.Type != MessageAuth {
+		return ErrUnauthenticated
+	}
 	switch frame.Type {
 	case MessageSync, MessageSyncReply:
 		return c.handleSync(frame)
@@ -221,6 +248,7 @@ func (c *Conn) handleAuth(frame *Frame) error {
 		// No auth configured — accept silently. Sending
 		// Authenticated lets Hocuspocus clients flip their
 		// internal flag even when the server doesn't care.
+		c.Authenticated = true
 		return c.Send(EncodeAuthAuthenticated(c.scope()))
 	}
 	if err := c.OnAuthenticate(c.DocName, token); err != nil {
@@ -232,12 +260,28 @@ func (c *Conn) handleAuth(frame *Frame) error {
 		c.AuthFailed = true
 		return nil
 	}
-	return c.Send(EncodeAuthAuthenticated(c.scope()))
+	if err := c.Send(EncodeAuthAuthenticated(c.scope())); err != nil {
+		return err
+	}
+	first := !c.Authenticated
+	c.Authenticated = true
+	if first && c.OnAuthenticated != nil {
+		return c.OnAuthenticated()
+	}
+	return nil
 }
+
+// Freeze makes the connection read-only, or with false ends that, from any
+// goroutine: for an application that takes writing away from a connection
+// that is open (a document that was closed for editing). It adds to
+// ReadOnly, which stays what the transport set.
+func (c *Conn) Freeze(frozen bool) { c.frozen.Store(frozen) }
+
+func (c *Conn) readOnly() bool { return c.ReadOnly || c.frozen.Load() }
 
 // scope is the Authenticated scope Hocuspocus sends for this connection.
 func (c *Conn) scope() string {
-	if c.ReadOnly {
+	if c.readOnly() {
 		return ScopeReadOnly
 	}
 	return ScopeReadWrite
@@ -263,7 +307,22 @@ func (c *Conn) handleSync(frame *Frame) error {
 		// apply, no broadcast) so it reaches neither the Doc nor peers.
 		// The client still receives others' updates and its awareness
 		// still flows; only its document writes are refused.
-		if c.ReadOnly {
+		if c.readOnly() {
+			if c.AckUpdates {
+				return c.Send(EncodeSyncStatus(false))
+			}
+			return nil
+		}
+		// An update with nothing in it, which is what a client that
+		// has nothing new answers the server's SyncStep1 with on every
+		// connection, changes nothing: it is acknowledged and goes no
+		// further. Broadcast is also what stores an update and tells
+		// the application about it, and a row per reconnect is not a
+		// change to the document.
+		if isEmptyUpdate(frame.Payload) {
+			if c.AckUpdates {
+				return c.Send(EncodeSyncStatus(true))
+			}
 			return nil
 		}
 		// Apply (which queues missing deps in encoding.Pending) and
@@ -277,11 +336,20 @@ func (c *Conn) handleSync(frame *Frame) error {
 		// because the fan-out semantics on receivers are identical
 		// and using a single sub-type simplifies their dispatcher.
 		c.Broadcast(EncodeSyncUpdate(frame.Payload))
+		if c.AckUpdates {
+			return c.Send(EncodeSyncStatus(true))
+		}
 		return nil
 
 	default:
 		return fmt.Errorf("%w: %d", ErrUnknownSyncSubType, frame.SyncSub)
 	}
+}
+
+// isEmptyUpdate reports whether a V1 update is the empty one: no structs
+// and no deletions.
+func isEmptyUpdate(update []byte) bool {
+	return len(update) == 2 && update[0] == 0 && update[1] == 0
 }
 
 func (c *Conn) handleAwareness(frame *Frame) error {
@@ -387,3 +455,8 @@ func subTypeName(t SyncSubType) string {
 // not wrap this; it propagates so the read loop can tear down the
 // connection cleanly.
 var ErrSendFailed = errors.New("sync: send failed")
+
+// ErrUnauthenticated is returned by HandleFrame for a message other than
+// Auth on a connection that requires a token and has not sent an accepted
+// one. The transport closes the connection with CloseStatusUnauthorized.
+var ErrUnauthenticated = errors.New("sync: message before authentication")

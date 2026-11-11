@@ -367,11 +367,13 @@
 
 ## Sync protocol / WebSocket server
 
-### Hocuspocus framing (client resolved in 1.36.0, server open)
+### Hocuspocus framing (client resolved in 1.36.0, server after it)
 
 - **What:** `@hocuspocus/provider` (2.15, 3.4, 4.8) cannot sync with the ygo server, and before 1.36.0 the Go client could not sync with `@hocuspocus/server` 4.8. Every Hocuspocus frame starts with `varString(documentName)` before the message type; ygo's frames start with the message type, as y-websocket's do. Found on 8 Nov 2026 by running the real clients: the two entries below were marked resolved against fixtures built without the document name, so they held only for y-websocket-style frames.
 - **Resolved for the client in 1.36.0:** `client.Options.Hocuspocus`: the routing key on every frame, Auth with the sub-types and scope `@hocuspocus/common` uses (the numbers in `internal/sync` were in another order, which no client uses), the SyncStatus bookkeeping (`Client.Unsynced`), CLOSE both ways, stateless messages, and a QueryAwareness keepalive for server 4's idle timeout, which counts no client ping. The CI job `hocuspocus` runs it against servers 4.8, 3.4 and 2.15 next to the provider of each version.
-- **Still open, the server:** yserve parses no routing key. Fix needs: reading the document name in front of every frame (the first frame decides between the two framings: y-websocket always opens with Sync step 1, type 0, and a document name is never empty), the Auth handshake providers wait for, several documents over one socket, and a CI job with the real providers.
+- **Resolved for the server after 1.36.0:** `server.Options.Hocuspocus` (`yserve -hocuspocus`): the document of a connection is the one its first frame names, a token is checked before anything is sent to the connection or fanned out to it, and updates are acknowledged with SyncStatus. `testdata/e2e/hocuspocus-provider.mjs` runs providers 4.8, 3.4 and 2.15 against it in CI.
+- **Several documents over one socket** (`HocuspocusProviderWebsocket` shared between providers) followed: each document is a session of its own on the connection.
+- **Still open:** one handler serving both framings (the first frame could decide: y-websocket always opens with Sync step 1, type 0, and a document name is never empty).
 
 ### The y-websocket client sends offline edits twice on reconnect (open)
 

@@ -47,7 +47,7 @@ func (um *UndoManager) deletedByAStack(id block.ID) bool {
 // item whose parent type was deleted is restored into the parent's live
 // copy. Returns the restored item, or nil when restoration is not
 // possible (a parent that cannot be restored, a conflicting later write
-// on the key, or Move and subdocument content). For an item restored
+// on the key, or Move content). For an item restored
 // before whose copy garbage collection has since removed, it returns the
 // item itself: yjs returns the collected struct, and the step counts.
 // Callers only test the result against nil.
@@ -99,7 +99,7 @@ func (um *UndoManager) redoItem(txn *doc.TransactionMut, item *block.Item, si *S
 		parent = pi.Content.Branch
 	}
 
-	// Move and subdocument content are not restored.
+	// Move content is not restored.
 	if !item.Content.CopyableForUndo() {
 		return nil
 	}
